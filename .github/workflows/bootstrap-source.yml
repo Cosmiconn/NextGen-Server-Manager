@@ -14,7 +14,6 @@ permissions:
 
 jobs:
   expand-source:
-    if: ${{ hashFiles('src/NextGen.Fiesta.ServerManager/NextGen.Fiesta.ServerManager.csproj') == '' }}
     runs-on: windows-latest
     timeout-minutes: 15
 
@@ -24,11 +23,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Stop when source tree is already present
+        id: sourcecheck
+        shell: pwsh
+        run: |
+          $project = Join-Path $env:GITHUB_WORKSPACE 'src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj'
+          if (Test-Path $project) {
+            'present=true' >> $env:GITHUB_OUTPUT
+            Write-Host 'Expanded source tree already present.'
+          }
+          else {
+            'present=false' >> $env:GITHUB_OUTPUT
+            Write-Host 'Expanded source tree missing; importing baseline.'
+          }
+
       - name: Restore 0.3.4 baseline archive
+        if: steps.sourcecheck.outputs.present != 'true'
         shell: pwsh
         run: .\scripts\Restore-Baseline.ps1 -Destination "$env:GITHUB_WORKSPACE\_restored-source"
 
       - name: Import source tree into repository root
+        if: steps.sourcecheck.outputs.present != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -39,8 +54,8 @@ jobs:
             throw 'Restored baseline does not contain the expected project tree.'
           }
 
-          # Preserve repository-specific handoff/workflow README. The restored source
-          # contributes the real solution, src tree, build scripts and technical docs.
+          # Preserve the repository-specific handoff/workflow README. The restored
+          # source contributes the solution, src tree, build scripts and technical docs.
           $repoReadme = Get-Content -Raw -LiteralPath (Join-Path $repo 'README.md')
 
           Get-ChildItem -LiteralPath $src -Force | ForEach-Object {
@@ -51,6 +66,7 @@ jobs:
           Remove-Item -LiteralPath $src -Recurse -Force
 
       - name: Commit expanded source tree
+        if: steps.sourcecheck.outputs.present != 'true'
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
