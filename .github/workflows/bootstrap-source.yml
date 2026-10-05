@@ -1,0 +1,64 @@
+name: Bootstrap Source Tree
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'baseline/0.3.4/**'
+      - 'scripts/Restore-Baseline.ps1'
+      - '.github/workflows/bootstrap-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  expand-source:
+    if: ${{ hashFiles('src/NextGen.Fiesta.ServerManager/NextGen.Fiesta.ServerManager.csproj') == '' }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore 0.3.4 baseline archive
+        shell: pwsh
+        run: .\scripts\Restore-Baseline.ps1 -Destination "$env:GITHUB_WORKSPACE\_restored-source"
+
+      - name: Import source tree into repository root
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_WORKSPACE
+          $src = Join-Path $repo '_restored-source'
+
+          if (-not (Test-Path (Join-Path $src 'src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj'))) {
+            throw 'Restored baseline does not contain the expected project tree.'
+          }
+
+          # Preserve repository-specific handoff/workflow README. The restored source
+          # contributes the real solution, src tree, build scripts and technical docs.
+          $repoReadme = Get-Content -Raw -LiteralPath (Join-Path $repo 'README.md')
+
+          Get-ChildItem -LiteralPath $src -Force | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $repo -Recurse -Force
+          }
+
+          Set-Content -LiteralPath (Join-Path $repo 'README.md') -Value $repoReadme -Encoding utf8
+          Remove-Item -LiteralPath $src -Recurse -Force
+
+      - name: Commit expanded source tree
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if (git diff --cached --quiet) {
+            Write-Host 'Source tree already present; nothing to commit.'
+            exit 0
+          }
+          git commit -m "Import 0.3.4 source tree"
+          git push origin HEAD:main
