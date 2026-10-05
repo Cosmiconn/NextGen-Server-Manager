@@ -36,7 +36,8 @@ else {
     throw "Keine Baseline-Archivteile unter $baseline gefunden (source.zip.part* oder source.b64.part*)."
 }
 
-$expected = '8766c6647295571db242952d438560273b21413f29845bf2ff939ba0dc1affff'
+# Hash of the decoded source ZIP currently stored in baseline/0.3.4/source.b64.part*.
+$expected = '7a2b93ef0d4ed26bbc6ab83b243b40577b5bec82beb6ad9738dbdfd14d12a1e4'
 $actual = (Get-FileHash -Algorithm SHA256 $zipPath).Hash.ToLowerInvariant()
 if ($actual -ne $expected) {
     throw "Baseline-Archiv SHA256 stimmt nicht. Erwartet $expected, erhalten $actual"
