@@ -10,9 +10,11 @@ on:
       - 'research/**'
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
+    if: ${{ hashFiles('src/NextGen.Fiesta.ServerManager/NextGen.Fiesta.ServerManager.csproj') != '' }}
     runs-on: windows-latest
     timeout-minutes: 20
 
@@ -25,21 +27,14 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore baseline source
-        shell: pwsh
-        run: .\scripts\Restore-Baseline.ps1 -Destination "$env:GITHUB_WORKSPACE\_src"
-
       - name: Restore
-        working-directory: _src
         run: dotnet restore NextGen.Fiesta.ServerManager.sln
 
       - name: Build Release x64
-        working-directory: _src
         run: dotnet build NextGen.Fiesta.ServerManager.sln -c Release --no-restore -p:Platform=x64
 
       - name: Publish win-x64
-        working-directory: _src
-        run: dotnet publish src/NextGen.Fiesta.ServerManager/NextGen.Fiesta.ServerManager.csproj -c Release -r win-x64 --self-contained false --no-restore -o ../artifacts/win-x64
+        run: dotnet publish src/NextGen.Fiesta.ServerManager/NextGen.Fiesta.ServerManager.csproj -c Release -r win-x64 --self-contained false --no-restore -o artifacts/win-x64
 
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
