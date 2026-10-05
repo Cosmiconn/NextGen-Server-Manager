@@ -1,0 +1,7 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+.nextgen-cache/
+.nextgen-backups/
