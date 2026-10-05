@@ -22,7 +22,7 @@ if ($rawParts.Count -gt 0) {
         $out.Dispose()
     }
 }
-elif ($b64Parts.Count -gt 0) {
+elseif ($b64Parts.Count -gt 0) {
     $builder = New-Object System.Text.StringBuilder
     foreach ($part in $b64Parts) {
         [void]$builder.Append((Get-Content -Raw -LiteralPath $part.FullName))
