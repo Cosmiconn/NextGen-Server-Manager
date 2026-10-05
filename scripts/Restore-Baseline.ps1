@@ -47,5 +47,10 @@ if (Test-Path $Destination) {
     Remove-Item -Recurse -Force $Destination
 }
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-Expand-Archive -Path $zipPath -DestinationPath $Destination -Force
+
+# Expand-Archive on some Windows Server 2025 / PowerShell 7 runner images can fail
+# with a generic OperationStopped. Use the .NET ZIP implementation directly.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $Destination, $true)
+
 Write-Host "Baseline 0.3.4 wiederhergestellt nach: $Destination"
