@@ -47,6 +47,7 @@ public sealed class ZoneClientListenerTestConfiguration
         var serverInfoPath = readiness.ServerInfoPath;
         var backupPath = GetBackupPath(serverInfoPath);
         var manifestPath = GetManifestPath(serverInfoPath);
+        var auditBackupPath = GetAppliedAuditBackupPath(serverInfoPath);
         var stagePath = serverInfoPath + ".nextgen-zone-listener-stage-" + Guid.NewGuid().ToString("N");
         var manifestTemp = manifestPath + ".tmp-" + Guid.NewGuid().ToString("N");
         var replaced = false;
@@ -73,12 +74,15 @@ public sealed class ZoneClientListenerTestConfiguration
             if (processCheck.ProcessIds.Count > 0)
                 throw new IOException("Zone-Prozess wurde während des Stagings gestartet: " + FormatPids(processCheck.ProcessIds));
 
-            if (File.Exists(backupPath) || File.Exists(manifestPath))
-                throw new IOException("Listener-Backup oder Listener-Manifest wurde seit dem Preflight angelegt.");
+            if (File.Exists(backupPath) || File.Exists(manifestPath) || File.Exists(auditBackupPath))
+                throw new IOException("Listener-Backup, Listener-Manifest oder Listener-Auditbackup wurde seit dem Preflight angelegt.");
 
             if (!Sha256File(readiness.TargetZoneExePath).Equals(ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256, StringComparison.OrdinalIgnoreCase))
                 throw new IOException("Ziel-Zone.exe ist unmittelbar vor der Änderung nicht mehr der zertifizierte Patch-Build.");
-            ValidateDeploymentMetadata(readiness.TargetZoneExePath);
+
+            var deploymentError = ValidateDeploymentMetadata(readiness.TargetZoneExePath);
+            if (deploymentError is not null)
+                throw new IOException("Deployment-Zustand änderte sich nach dem Preflight: " + deploymentError);
 
             File.Replace(stagePath, serverInfoPath, backupPath, ignoreMetadataErrors: false);
             replaced = true;
