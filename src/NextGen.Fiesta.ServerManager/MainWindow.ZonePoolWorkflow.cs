@@ -25,7 +25,10 @@ public partial class MainWindow
     private TextBox? _zoneLoadCapturePathBox;
     private TextBox? _zoneLoadCaptureCharacterBox;
     private TextBox? _zoneLoadTemplatePathBox;
+    private TextBox? _zoneLoadCharacterCreateTemplatePathBox;
     private TextBox? _zoneLoadCredentialPathBox;
+    private TextBox? _zoneLoadIdentityCountBox;
+    private TextBox? _zoneLoadIdentityPrefixBox;
     private TextBox? _zoneLoadLoginHostBox;
     private TextBox? _zoneLoadLoginPortBox;
     private TextBox? _zoneLoadWorldIdBox;
@@ -244,7 +247,7 @@ public partial class MainWindow
         }));
         _zoneLoadCaptureCharacterBox = CreateZoneLoadTextBox(125, "Charaktername");
         captureRow.Children.Add(_zoneLoadCaptureCharacterBox);
-        captureRow.Children.Add(CreateZonePoolButton("CH6/1 importieren", true,
+        captureRow.Children.Add(CreateZonePoolButton("Capture importieren", true,
             () => RunZonePoolUiActionAsync("Zone-Transfer Import", ImportZoneTransferCaptureAsync)));
         stack.Children.Add(captureRow);
 
@@ -281,6 +284,44 @@ public partial class MainWindow
             await Task.CompletedTask;
         }));
         stack.Children.Add(filesRow);
+
+        var identityRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+        identityRow.Children.Add(new TextBlock
+        {
+            Text = "Auto-Create",
+            Width = 112,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 10,
+            Foreground = (Brush)FindResource("MutedStrong")
+        });
+        _zoneLoadCharacterCreateTemplatePathBox = CreateZoneLoadTextBox(310, "capture-basiertes CH5/1 CharacterCreate Template");
+        identityRow.Children.Add(_zoneLoadCharacterCreateTemplatePathBox);
+        identityRow.Children.Add(CreateZonePoolButton("CH5/1 Template…", false, async () =>
+        {
+            BrowseZoneLoadCharacterCreateTemplate();
+            await Task.CompletedTask;
+        }));
+        identityRow.Children.Add(new TextBlock
+        {
+            Text = "Anzahl",
+            FontSize = 9,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(9, 0, 3, 0)
+        });
+        _zoneLoadIdentityCountBox = CreateZoneLoadTextBox(58, "1..2000", "1600");
+        identityRow.Children.Add(_zoneLoadIdentityCountBox);
+        identityRow.Children.Add(new TextBlock
+        {
+            Text = "Prefix",
+            FontSize = 9,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 3, 0)
+        });
+        _zoneLoadIdentityPrefixBox = CreateZoneLoadTextBox(70, "Account-/Char-Prefix", "ngl");
+        identityRow.Children.Add(_zoneLoadIdentityPrefixBox);
+        identityRow.Children.Add(CreateZonePoolButton("SQL + Credentials erzeugen", false,
+            () => RunZonePoolUiActionAsync("Load-Identitäten", GenerateLoadIdentitiesAsync)));
+        stack.Children.Add(identityRow);
 
         var networkRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
         networkRow.Children.Add(new TextBlock
@@ -326,7 +367,7 @@ public partial class MainWindow
 
         _zoneLoadStatus = new TextBlock
         {
-            Text = "Noch kein Player-Loadtest ausgeführt. Zuerst einen normalen Client-Login mitschneiden und CH6/1 importieren.",
+            Text = "Noch kein Player-Loadtest ausgeführt. Capture importieren; für Auto-Create muss der Mitschnitt zusätzlich eine echte Charaktererstellung enthalten.",
             Foreground = (Brush)FindResource("Muted"),
             FontSize = 9,
             TextWrapping = TextWrapping.Wrap
@@ -377,6 +418,19 @@ public partial class MainWindow
             _zoneLoadTemplatePathBox.Text = dialog.FileName;
     }
 
+    private void BrowseZoneLoadCharacterCreateTemplate()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "NA2016 CharacterCreate Template auswählen",
+            Filter = "JSON (*.json)|*.json|Alle Dateien (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == true && _zoneLoadCharacterCreateTemplatePathBox is not null)
+            _zoneLoadCharacterCreateTemplatePathBox.Text = dialog.FileName;
+    }
+
     private void BrowseZoneLoadCredentials()
     {
         var dialog = new OpenFileDialog
@@ -407,6 +461,10 @@ public partial class MainWindow
         var loginPort = ParseZoneLoadInt(_zoneLoadLoginPortBox, "Login-Port", 1, 65535);
         var profileOutput = Path.Combine(GetZonePoolWorkDirectory(), $"{zoneName}-client-capture-profile.json");
 
+        var characterCreateOutput = Path.Combine(
+            GetZonePoolWorkDirectory(),
+            $"{zoneName}-character-create-template.json");
+
         var imported = await Task.Run(() =>
         {
             var zoneResult = new FiestaZoneTransferCaptureImporter().Import(
@@ -418,7 +476,10 @@ public partial class MainWindow
                     ExpectedCharacterName = character
                 });
             if (!zoneResult.Success)
-                return (Zone: zoneResult, Client: (FiestaClientCaptureProfileResult?)null);
+                return (
+                    Zone: zoneResult,
+                    Client: (FiestaClientCaptureProfileResult?)null,
+                    Character: (FiestaCharacterCreateCaptureResult?)null);
 
             var clientResult = new FiestaClientCaptureProfileImporter().Import(
                 new FiestaClientCaptureProfileOptions
@@ -427,7 +488,19 @@ public partial class MainWindow
                     OutputProfilePath = profileOutput,
                     LoginPort = loginPort
                 });
-            return (Zone: zoneResult, Client: clientResult);
+            if (!clientResult.Success || clientResult.Profile is null)
+                return (Zone: zoneResult, Client: clientResult, Character: (FiestaCharacterCreateCaptureResult?)null);
+
+            var characterResult = new FiestaCharacterCreateCaptureImporter().Import(
+                new FiestaCharacterCreateCaptureOptions
+                {
+                    CapturePath = capture,
+                    OutputTemplatePath = characterCreateOutput,
+                    WorldPort = clientResult.Profile.WorldPort,
+                    ExpectedCharacterName = character
+                });
+
+            return (Zone: zoneResult, Client: clientResult, Character: characterResult);
         });
 
         if (!imported.Zone.Success)
@@ -441,6 +514,8 @@ public partial class MainWindow
 
         var profile = imported.Client.Profile;
         if (_zoneLoadTemplatePathBox is not null) _zoneLoadTemplatePathBox.Text = imported.Zone.TemplatePath;
+        if (imported.Character?.Success == true && _zoneLoadCharacterCreateTemplatePathBox is not null)
+            _zoneLoadCharacterCreateTemplatePathBox.Text = imported.Character.TemplatePath;
         if (_zoneLoadLoginHostBox is not null) _zoneLoadLoginHostBox.Text = profile.LoginHost;
         if (_zoneLoadLoginPortBox is not null) _zoneLoadLoginPortBox.Text = profile.LoginPort.ToString();
         if (_zoneLoadWorldIdBox is not null) _zoneLoadWorldIdBox.Text = profile.WorldId.ToString();
@@ -448,8 +523,40 @@ public partial class MainWindow
         if (_zoneLoadClientVersionBox is not null) _zoneLoadClientVersionBox.Text = profile.ClientVersion.ToString();
         if (_zoneLoadFileHashBox is not null) _zoneLoadFileHashBox.Text = profile.FileHash ?? string.Empty;
 
-        var detail = imported.Zone.Detail + " · " + imported.Client.Detail +
-                     $" · PCAP {ShortHash(profile.SourceCaptureSha256)}";
+        var createDetail = imported.Character?.Success == true
+            ? imported.Character.Detail
+            : "CH5/1 nicht im Capture: 1-Client-Test mit vorhandenem Charakter möglich; Auto-Create-Ramp benötigt einen Capture mit echter Charaktererstellung.";
+
+        var detail = imported.Zone.Detail + " · " + imported.Client.Detail + " · " +
+                     createDetail + $" · PCAP {ShortHash(profile.SourceCaptureSha256)}";
+        SetZoneLoadStatus(detail);
+        return detail;
+    }
+
+    private async Task<string> GenerateLoadIdentitiesAsync()
+    {
+        var count = ParseZoneLoadInt(_zoneLoadIdentityCountBox, "Account-Anzahl", 1, 2000);
+        var prefix = _zoneLoadIdentityPrefixBox?.Text.Trim();
+        if (string.IsNullOrWhiteSpace(prefix))
+            throw new InvalidOperationException("Account-/Char-Prefix fehlt.");
+
+        var result = await Task.Run(() => new FiestaLoadIdentityGenerator().Generate(
+            new FiestaLoadIdentityGenerationOptions
+            {
+                Count = count,
+                UsernamePrefix = prefix.ToLowerInvariant(),
+                CharacterPrefix = prefix.ToUpperInvariant(),
+                CharacterSlot = 0,
+                AccountDatabase = "Account",
+                OutputDirectory = GetZonePoolWorkDirectory()
+            }));
+
+        if (_zoneLoadCredentialPathBox is not null)
+            _zoneLoadCredentialPathBox.Text = result.CredentialManifestPath;
+
+        var detail = result.Detail +
+                     $" · SQL SHA {ShortHash(result.SqlSha256)} · Manifest SHA {ShortHash(result.ManifestSha256)} · " +
+                     "WICHTIG: Das SQL-Skript vor dem Rampentest einmal bewusst gegen die lokale TEST-Account-Datenbank ausführen; der Manager führt es nicht automatisch aus.";
         SetZoneLoadStatus(detail);
         return detail;
     }
@@ -471,6 +578,7 @@ public partial class MainWindow
         {
             var target = RequireZonePoolTarget();
             var template = _zoneLoadTemplatePathBox?.Text.Trim();
+            var characterCreateTemplate = _zoneLoadCharacterCreateTemplatePathBox?.Text.Trim();
             var credentials = _zoneLoadCredentialPathBox?.Text.Trim();
             if (string.IsNullOrWhiteSpace(template) || !File.Exists(template))
                 throw new InvalidOperationException("Gültiges CH6/1-Template fehlt. Erst Capture importieren oder Template auswählen.");
@@ -501,6 +609,10 @@ public partial class MainWindow
                     ClientVersion = checked((ushort)clientVersion),
                     FileHash = fileHash,
                     ZoneTransferTemplatePath = template,
+                    CharacterCreateTemplatePath =
+                        !string.IsNullOrWhiteSpace(characterCreateTemplate) && File.Exists(characterCreateTemplate)
+                            ? characterCreateTemplate
+                            : null,
                     StepTimeout = TimeSpan.FromSeconds(15),
                     ZoneLoginTimeout = TimeSpan.FromSeconds(30),
                     HoldDuration = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(1)
