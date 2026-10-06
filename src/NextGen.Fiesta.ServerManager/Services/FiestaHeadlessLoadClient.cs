@@ -84,7 +84,19 @@ public sealed class FiestaHeadlessLoadClient
             var randomId = BinaryPrimitives.ReadUInt16LittleEndian(characterList.Body.AsSpan(0, 2));
             var characterCount = characterList.Body[2];
             if (characterCount == 0)
-                throw new InvalidOperationException("Der Testaccount besitzt keinen Charakter.");
+            {
+                if (!credential.CreateCharacterIfMissing)
+                    throw new InvalidOperationException("Der Testaccount besitzt keinen Charakter und Auto-Create ist nicht freigegeben.");
+                if (string.IsNullOrWhiteSpace(options.CharacterCreateTemplatePath))
+                    throw new InvalidOperationException("Auto-Create benötigt ein capture-basiertes CH5/1 CharacterCreate-Template.");
+
+                var createTemplate = FiestaCharacterCreateTemplate.Load(options.CharacterCreateTemplatePath);
+                var createPayload = createTemplate.Materialize(credential.Slot, credential.CharacterName);
+                await worldConnection.SendDecryptedPayloadAsync(createPayload, cancellationToken);
+                await WaitForAsync(worldConnection, 5, 6, options.StepTimeout, cancellationToken);
+                characterCount = 1;
+                SetStage(FiestaLoadClientStage.CharacterCreated);
+            }
 
             await worldConnection.SendPacketAsync(4, 1, new[] { credential.Slot }, cancellationToken);
             var zoneRedirect = await WaitForAsync(worldConnection, 4, 3, options.StepTimeout, cancellationToken);
@@ -250,6 +262,13 @@ public sealed class FiestaHeadlessLoadClient
                 throw new InvalidOperationException("Login/World meldete SH3/9 Error.");
             if (packet.Header == 4 && packet.Type == 2)
                 throw new InvalidOperationException("World/Zone meldete SH4/2 ConnectError.");
+            if (packet.Header == 5 && packet.Type == 4)
+            {
+                var code = packet.Body.Length >= 2
+                    ? BinaryPrimitives.ReadUInt16LittleEndian(packet.Body.AsSpan(0, 2))
+                    : 0;
+                throw new InvalidOperationException($"World meldete SH5/4 CharacterCreationError ({code}).");
+            }
             if (packet.Header == expectedHeader && packet.Type == expectedType)
                 return packet;
         }
@@ -378,6 +397,7 @@ public enum FiestaLoadClientStage
     LoginAuthenticated,
     WorldRedirectReceived,
     WorldConnected,
+    CharacterCreated,
     ZoneRedirectReceived,
     ZoneConnected,
     ZoneAuthenticated,
@@ -396,6 +416,7 @@ public sealed class FiestaHeadlessProbeOptions
     public string ClientTag { get; init; } = "Original";
     public string? FileHash { get; init; }
     public string? ZoneTransferTemplatePath { get; init; }
+    public string? CharacterCreateTemplatePath { get; init; }
     public bool AllowEmulatorSizedZoneTransfer { get; init; }
     public TimeSpan StepTimeout { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan ZoneLoginTimeout { get; init; } = TimeSpan.FromSeconds(30);
@@ -411,6 +432,8 @@ public sealed class FiestaHeadlessProbeOptions
         if (HoldDuration < TimeSpan.Zero) throw new ArgumentException("HoldDuration darf nicht negativ sein.");
         if (!string.IsNullOrWhiteSpace(ZoneTransferTemplatePath) && !File.Exists(ZoneTransferTemplatePath))
             throw new FileNotFoundException("Zone-Transfer-Template wurde nicht gefunden.", ZoneTransferTemplatePath);
+        if (!string.IsNullOrWhiteSpace(CharacterCreateTemplatePath) && !File.Exists(CharacterCreateTemplatePath))
+            throw new FileNotFoundException("CharacterCreate-Template wurde nicht gefunden.", CharacterCreateTemplatePath);
     }
 }
 
@@ -421,6 +444,7 @@ public sealed class FiestaLoadClientCredential
     public string? PasswordMd5 { get; init; }
     public string CharacterName { get; init; } = string.Empty;
     public byte Slot { get; init; }
+    public bool CreateCharacterIfMissing { get; init; }
 
     public void Validate()
     {
