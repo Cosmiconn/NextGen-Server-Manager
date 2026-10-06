@@ -85,6 +85,72 @@ jobs:
         shell: pwsh
         run: dotnet publish "$env:SOURCE_ROOT\src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj" -c Release -r win-x64 --self-contained false --no-restore -o "$env:GITHUB_WORKSPACE\artifacts\win-x64"
 
+      - name: WPF startup smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'artifacts\win-x64\NextGen.Fiesta.ServerManager.exe'
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "Published executable missing: $exe"
+          }
+
+          $startupLog = Join-Path $env:LOCALAPPDATA 'NextGenFiestaServerManager\startup.log'
+          Remove-Item -LiteralPath $startupLog -Force -ErrorAction SilentlyContinue
+          $process = Start-Process -FilePath $exe -PassThru
+
+          try {
+            $deadline = (Get-Date).AddSeconds(12)
+            $shown = $false
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Milliseconds 500
+              $process.Refresh()
+
+              if (Test-Path -LiteralPath $startupLog) {
+                $startupText = Get-Content -LiteralPath $startupLog -Raw -ErrorAction SilentlyContinue
+                if ($startupText -match 'FATAL ') {
+                  Write-Host $startupText
+                  throw 'WPF startup log contains a fatal exception.'
+                }
+                if ($startupText -match 'MainWindow successfully shown\.') {
+                  $shown = $true
+                  break
+                }
+              }
+
+              if ($process.HasExited) {
+                $exitCode = $process.ExitCode
+                $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
+                Write-Host $startupText
+                throw "WPF process exited during startup smoke test with code $exitCode."
+              }
+            }
+
+            if (-not $shown) {
+              $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
+              Write-Host $startupText
+              throw 'MainWindow did not report successful Show() within 12 seconds.'
+            }
+
+            # Keep the dispatcher alive a little longer so Loaded/SizeChanged handlers,
+            # runtime styles and responsive shell construction can fail the test too.
+            Start-Sleep -Seconds 4
+            $process.Refresh()
+            $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
+            Write-Host $startupText
+            if ($startupText -match 'FATAL ') {
+              throw 'WPF runtime smoke log contains a fatal exception after Show().'
+            }
+            if ($process.HasExited) {
+              throw "WPF process exited unexpectedly after Show() with code $($process.ExitCode)."
+            }
+          }
+          finally {
+            $process.Refresh()
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
