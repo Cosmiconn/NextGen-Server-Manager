@@ -48,12 +48,18 @@ public partial class MainWindow
         if (main is null || width <= 0)
             return;
 
-        var available = Math.Max(560, width - 32);
-        var mainTabWidth = Math.Max(130, (available - 24) / 4.0);
-        for (var i = 0; i < Math.Min(4, main.Items.Count); i++)
+        // Above 960 DIP, MainWindow's reference-width calculation stays authoritative.
+        // This narrow override exists only to remove the old 220-DIP floor when the
+        // user deliberately resizes further down.
+        if (width < 960)
         {
-            if (main.Items[i] is TabItem tab)
-                tab.Width = mainTabWidth;
+            var available = Math.Max(560, width - 32);
+            var mainTabWidth = Math.Max(130, (available - 24) / 4.0);
+            for (var i = 0; i < Math.Min(4, main.Items.Count); i++)
+            {
+                if (main.Items[i] is TabItem tab)
+                    tab.Width = mainTabWidth;
+            }
         }
 
         if (main.Items.Count > 1 && main.Items[1] is TabItem server && server.Content is TabControl serverSub)
