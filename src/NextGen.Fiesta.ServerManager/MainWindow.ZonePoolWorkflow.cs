@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -20,6 +21,19 @@ public partial class MainWindow
     private string? _zonePoolCheckpointPath;
     private bool _zonePoolWorkflowBusy;
     private int _zonePoolAttachAttempts;
+
+    private TextBox? _zoneLoadCapturePathBox;
+    private TextBox? _zoneLoadCaptureCharacterBox;
+    private TextBox? _zoneLoadTemplatePathBox;
+    private TextBox? _zoneLoadCredentialPathBox;
+    private TextBox? _zoneLoadLoginHostBox;
+    private TextBox? _zoneLoadLoginPortBox;
+    private TextBox? _zoneLoadWorldIdBox;
+    private TextBox? _zoneLoadClientYearBox;
+    private TextBox? _zoneLoadClientVersionBox;
+    private TextBox? _zoneLoadFileHashBox;
+    private TextBlock? _zoneLoadStatus;
+    private CancellationTokenSource? _zoneLoadRampCancellation;
 
     private static bool RegisterZonePoolWorkflowLoadedHook()
     {
@@ -43,8 +57,10 @@ public partial class MainWindow
         if (ZonePoolWorkflowAttached.TryGetValue(this, out _)) return;
 
         _zonePoolAttachAttempts++;
-        if (_mainNavigation?.Items.Count < 2 ||
-            _mainNavigation.Items[1] is not TabItem serverTab ||
+        var mainNavigation = _mainNavigation;
+        if (mainNavigation is null ||
+            mainNavigation.Items.Count < 2 ||
+            mainNavigation.Items[1] is not TabItem serverTab ||
             serverTab.Content is not TabControl serverNavigation ||
             serverNavigation.Items.Count < 3 ||
             serverNavigation.Items[2] is not TabItem adaptive ||
@@ -183,7 +199,375 @@ public partial class MainWindow
             Margin = new Thickness(8, 0, 0, 0)
         });
         stack.Children.Add(rollbackRow);
+
+        stack.Children.Add(BuildPlayerLoadVerificationExpander());
         return card;
+    }
+
+    private Expander BuildPlayerLoadVerificationExpander()
+    {
+        var expander = new Expander
+        {
+            Header = "Player Load Verification · echter Login → World → Zone → ShinePlayer",
+            IsExpanded = false,
+            Margin = new Thickness(0, 9, 0, 0),
+            Foreground = (Brush)FindResource("Text")
+        };
+
+        var stack = new StackPanel { Margin = new Thickness(0, 7, 0, 0) };
+        stack.Children.Add(new TextBlock
+        {
+            Text = "Ziel: den noch offenen ShinePlayer-Nachweis oberhalb 1500 ohne grafische Clients durchführen. " +
+                   "Ein Test zählt nur, wenn der Headless-Client ClientReady erreicht UND der echte ShinePlayer-Zähler der laufenden zertifizierten Zone exakt mitsteigt. " +
+                   "Der Test startet/stopppt keine Serverdienste und verändert keine Binary.",
+            Foreground = (Brush)FindResource("Muted"),
+            FontSize = 10,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 7)
+        });
+
+        var captureRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+        captureRow.Children.Add(new TextBlock
+        {
+            Text = "Real-Client Capture",
+            Width = 112,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 10,
+            Foreground = (Brush)FindResource("MutedStrong")
+        });
+        _zoneLoadCapturePathBox = CreateZoneLoadTextBox(330, "Wireshark .pcap/.pcapng");
+        captureRow.Children.Add(_zoneLoadCapturePathBox);
+        captureRow.Children.Add(CreateZonePoolButton("PCAP wählen", false, async () =>
+        {
+            BrowseZoneLoadCapture();
+            await Task.CompletedTask;
+        }));
+        _zoneLoadCaptureCharacterBox = CreateZoneLoadTextBox(125, "Charaktername");
+        captureRow.Children.Add(_zoneLoadCaptureCharacterBox);
+        captureRow.Children.Add(CreateZonePoolButton("CH6/1 importieren", true,
+            () => RunZonePoolUiActionAsync("Zone-Transfer Import", ImportZoneTransferCaptureAsync)));
+        stack.Children.Add(captureRow);
+
+        var filesRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+        filesRow.Children.Add(new TextBlock
+        {
+            Text = "Template",
+            Width = 112,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 10,
+            Foreground = (Brush)FindResource("MutedStrong")
+        });
+        _zoneLoadTemplatePathBox = CreateZoneLoadTextBox(310, "CH6/1 Template JSON");
+        filesRow.Children.Add(_zoneLoadTemplatePathBox);
+        filesRow.Children.Add(CreateZonePoolButton("Template…", false, async () =>
+        {
+            BrowseZoneLoadTemplate();
+            await Task.CompletedTask;
+        }));
+        filesRow.Children.Add(new TextBlock
+        {
+            Text = "Credentials",
+            Width = 70,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 10,
+            Foreground = (Brush)FindResource("MutedStrong")
+        });
+        _zoneLoadCredentialPathBox = CreateZoneLoadTextBox(300, "Load-Credentials JSON");
+        filesRow.Children.Add(_zoneLoadCredentialPathBox);
+        filesRow.Children.Add(CreateZonePoolButton("Credentials…", false, async () =>
+        {
+            BrowseZoneLoadCredentials();
+            await Task.CompletedTask;
+        }));
+        stack.Children.Add(filesRow);
+
+        var networkRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+        networkRow.Children.Add(new TextBlock
+        {
+            Text = "Login-Protokoll",
+            Width = 112,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 10,
+            Foreground = (Brush)FindResource("MutedStrong")
+        });
+        networkRow.Children.Add(new TextBlock { Text = "Host", FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 3, 0) });
+        _zoneLoadLoginHostBox = CreateZoneLoadTextBox(112, "127.0.0.1", "127.0.0.1");
+        networkRow.Children.Add(_zoneLoadLoginHostBox);
+        networkRow.Children.Add(new TextBlock { Text = "Port", FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7, 0, 3, 0) });
+        _zoneLoadLoginPortBox = CreateZoneLoadTextBox(58, "9010", "9010");
+        networkRow.Children.Add(_zoneLoadLoginPortBox);
+        networkRow.Children.Add(new TextBlock { Text = "World", FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7, 0, 3, 0) });
+        _zoneLoadWorldIdBox = CreateZoneLoadTextBox(42, "0", "0");
+        networkRow.Children.Add(_zoneLoadWorldIdBox);
+        networkRow.Children.Add(new TextBlock { Text = "Year", FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7, 0, 3, 0) });
+        _zoneLoadClientYearBox = CreateZoneLoadTextBox(54, "2016", "2016");
+        networkRow.Children.Add(_zoneLoadClientYearBox);
+        networkRow.Children.Add(new TextBlock { Text = "Version", FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7, 0, 3, 0) });
+        _zoneLoadClientVersionBox = CreateZoneLoadTextBox(48, "2", "2");
+        networkRow.Children.Add(_zoneLoadClientVersionBox);
+        networkRow.Children.Add(new TextBlock { Text = "FileHash", FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7, 0, 3, 0) });
+        _zoneLoadFileHashBox = CreateZoneLoadTextBox(155, "optional");
+        networkRow.Children.Add(_zoneLoadFileHashBox);
+        stack.Children.Add(networkRow);
+
+        var actionRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
+        actionRow.Children.Add(CreateZonePoolButton("A · 1 Client + ShinePlayer beweisen", true,
+            () => RunPlayerLoadRampUiAsync(singleClientOnly: true)));
+        actionRow.Children.Add(CreateZonePoolButton("B · Ramp 1 → 1600", false,
+            () => RunPlayerLoadRampUiAsync(singleClientOnly: false)));
+        actionRow.Children.Add(CreateZonePoolButton("Abbrechen", false, async () =>
+        {
+            _zoneLoadRampCancellation?.Cancel();
+            SetZoneLoadStatus("Abbruch angefordert …");
+            await Task.CompletedTask;
+        }));
+        stack.Children.Add(actionRow);
+
+        _zoneLoadStatus = new TextBlock
+        {
+            Text = "Noch kein Player-Loadtest ausgeführt. Zuerst einen normalen Client-Login mitschneiden und CH6/1 importieren.",
+            Foreground = (Brush)FindResource("Muted"),
+            FontSize = 9,
+            TextWrapping = TextWrapping.Wrap
+        };
+        stack.Children.Add(_zoneLoadStatus);
+
+        expander.Content = stack;
+        return expander;
+    }
+
+    private TextBox CreateZoneLoadTextBox(double width, string toolTip, string? initialText = null)
+    {
+        var box = new TextBox
+        {
+            Width = width,
+            MinHeight = 28,
+            Padding = new Thickness(6, 4, 6, 4),
+            Margin = new Thickness(0, 0, 5, 0),
+            ToolTip = toolTip,
+            Text = initialText ?? string.Empty
+        };
+        return box;
+    }
+
+    private void BrowseZoneLoadCapture()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Wireshark-Mitschnitt mit einem vollständigen Fiesta-Login auswählen",
+            Filter = "Packet Capture (*.pcap;*.pcapng)|*.pcap;*.pcapng|Alle Dateien (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == true && _zoneLoadCapturePathBox is not null)
+            _zoneLoadCapturePathBox.Text = dialog.FileName;
+    }
+
+    private void BrowseZoneLoadTemplate()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "NA2016 Zone-Transfer Template auswählen",
+            Filter = "JSON (*.json)|*.json|Alle Dateien (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == true && _zoneLoadTemplatePathBox is not null)
+            _zoneLoadTemplatePathBox.Text = dialog.FileName;
+    }
+
+    private void BrowseZoneLoadCredentials()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Headless-Load-Credentials auswählen",
+            Filter = "JSON (*.json)|*.json|Alle Dateien (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == true && _zoneLoadCredentialPathBox is not null)
+            _zoneLoadCredentialPathBox.Text = dialog.FileName;
+    }
+
+    private async Task<string> ImportZoneTransferCaptureAsync()
+    {
+        var target = RequireZonePoolTarget();
+        var capture = _zoneLoadCapturePathBox?.Text.Trim();
+        var character = _zoneLoadCaptureCharacterBox?.Text.Trim();
+        if (string.IsNullOrWhiteSpace(capture) || !File.Exists(capture))
+            throw new InvalidOperationException("Bitte zuerst eine vorhandene .pcap/.pcapng-Datei auswählen.");
+        if (string.IsNullOrWhiteSpace(character))
+            throw new InvalidOperationException("Bitte den Charaktername des im Mitschnitt eingeloggten Clients angeben.");
+
+        var zoneName = new DirectoryInfo(Path.GetDirectoryName(target)!).Name;
+        var output = Path.Combine(GetZonePoolWorkDirectory(), $"{zoneName}-zone-transfer-template.json");
+        var zonePort = ResolveSelectedZoneClientPort(target);
+
+        var result = await Task.Run(() => new FiestaZoneTransferCaptureImporter().Import(
+            new FiestaZoneTransferCaptureOptions
+            {
+                CapturePath = capture,
+                OutputTemplatePath = output,
+                ZonePort = zonePort,
+                ExpectedCharacterName = character
+            }));
+
+        if (!result.Success) throw new InvalidOperationException(result.Detail);
+        if (_zoneLoadTemplatePathBox is not null) _zoneLoadTemplatePathBox.Text = result.TemplatePath;
+        SetZoneLoadStatus(result.Detail);
+        return result.Detail;
+    }
+
+    private async Task RunPlayerLoadRampUiAsync(bool singleClientOnly)
+    {
+        if (_zonePoolWorkflowBusy)
+        {
+            SetZoneLoadStatus("Eine Zone-Pool-/Load-Aktion läuft bereits.");
+            return;
+        }
+
+        _zonePoolWorkflowBusy = true;
+        _zoneLoadRampCancellation?.Dispose();
+        _zoneLoadRampCancellation = new CancellationTokenSource();
+        var cancellation = _zoneLoadRampCancellation;
+
+        try
+        {
+            var target = RequireZonePoolTarget();
+            var template = _zoneLoadTemplatePathBox?.Text.Trim();
+            var credentials = _zoneLoadCredentialPathBox?.Text.Trim();
+            if (string.IsNullOrWhiteSpace(template) || !File.Exists(template))
+                throw new InvalidOperationException("Gültiges CH6/1-Template fehlt. Erst Capture importieren oder Template auswählen.");
+            if (string.IsNullOrWhiteSpace(credentials) || !File.Exists(credentials))
+                throw new InvalidOperationException("Credential-Manifest fehlt.");
+
+            var loginHost = string.IsNullOrWhiteSpace(_zoneLoadLoginHostBox?.Text)
+                ? "127.0.0.1"
+                : _zoneLoadLoginHostBox.Text.Trim();
+            var loginPort = ParseZoneLoadInt(_zoneLoadLoginPortBox, "Login-Port", 1, 65535);
+            var worldId = ParseZoneLoadInt(_zoneLoadWorldIdBox, "World-ID", 0, 255);
+            var clientYear = ParseZoneLoadInt(_zoneLoadClientYearBox, "Client-Year", 1, ushort.MaxValue);
+            var clientVersion = ParseZoneLoadInt(_zoneLoadClientVersionBox, "Client-Version", 1, ushort.MaxValue);
+            var fileHash = _zoneLoadFileHashBox?.Text.Trim();
+            if (string.IsNullOrWhiteSpace(fileHash) || fileHash.Equals("optional", StringComparison.OrdinalIgnoreCase))
+                fileHash = null;
+
+            var options = new FiestaLoadRampOptions
+            {
+                TargetZoneExePath = target,
+                CredentialManifestPath = credentials,
+                ClientOptions = new FiestaHeadlessProbeOptions
+                {
+                    LoginHost = loginHost,
+                    LoginPort = loginPort,
+                    WorldId = checked((byte)worldId),
+                    ClientYear = checked((ushort)clientYear),
+                    ClientVersion = checked((ushort)clientVersion),
+                    FileHash = fileHash,
+                    ZoneTransferTemplatePath = template,
+                    StepTimeout = TimeSpan.FromSeconds(15),
+                    ZoneLoginTimeout = TimeSpan.FromSeconds(30),
+                    HoldDuration = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(1)
+                },
+                StageTargets = singleClientOnly
+                    ? new[] { 1 }
+                    : new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 },
+                ClientStartInterval = singleClientOnly ? TimeSpan.Zero : TimeSpan.FromMilliseconds(50),
+                StageSettleTime = singleClientOnly ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(10),
+                SessionHoldDuration = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(1),
+                FinalStabilityDuration = singleClientOnly ? TimeSpan.FromSeconds(10) : TimeSpan.FromMinutes(5),
+                StabilityPollInterval = TimeSpan.FromSeconds(5)
+            };
+
+            SetZoneLoadStatus(singleClientOnly
+                ? "1-Client-Probe läuft: Login → World → Zone → ShinePlayer …"
+                : "Load-Ramp läuft: 1 → 10 → 100 → 500 → 1000 → 1450 → 1510 → 1600 …");
+
+            var result = await new FiestaLoadRampCoordinator().RunAsync(
+                options,
+                p =>
+                {
+                    if (p.Phase is "STAGE-PASS" or "STAGE-FAIL" or "STABILITY" or "CLIENT-FAIL" ||
+                        (p.Phase == "HOLDING" && (p.ReadyClients <= 10 || p.ReadyClients % 25 == 0)) ||
+                        p.Phase == "WAIT-READY")
+                    {
+                        SetZoneLoadStatus(
+                            $"{p.Phase} · Ziel {p.TargetClients:N0} · Ready {p.ReadyClients:N0} · ShinePlayer {p.ServerPlayers:N0} · {p.Detail}");
+                    }
+                },
+                cancellation.Token);
+
+            SetZoneLoadStatus(result.Detail);
+            if (result.Blocked)
+            {
+                MessageBox.Show(this, result.Detail, "Player Load Verification", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            else if (result.Passed)
+            {
+                MessageBox.Show(this, result.Detail, "Player Load Verification", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            SetZoneLoadStatus("Player-Loadtest abgebrochen.");
+        }
+        catch (Exception ex)
+        {
+            SetZoneLoadStatus("Player-Loadtest FEHLER: " + ex.Message);
+            MessageBox.Show(this, ex.Message, "Player Load Verification", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _zonePoolWorkflowBusy = false;
+            cancellation.Dispose();
+            if (ReferenceEquals(_zoneLoadRampCancellation, cancellation))
+                _zoneLoadRampCancellation = null;
+        }
+    }
+
+    private int ResolveSelectedZoneClientPort(string targetZoneExePath)
+    {
+        if (DataContext is MainViewModel vm)
+        {
+            var match = vm.Services.FirstOrDefault(service =>
+                !string.IsNullOrWhiteSpace(service.ExecutablePath) &&
+                PathEqualsSafe(service.ExecutablePath, targetZoneExePath));
+            if (match?.ClientPort is int port && port is > 0 and <= 65535)
+                return port;
+        }
+        return 9016;
+    }
+
+    private static int ParseZoneLoadInt(TextBox? box, string label, int min, int max)
+    {
+        if (box is null || !int.TryParse(box.Text.Trim(), out var value) || value < min || value > max)
+            throw new InvalidOperationException($"{label} muss zwischen {min} und {max} liegen.");
+        return value;
+    }
+
+    private static bool PathEqualsSafe(string left, string right)
+    {
+        try
+        {
+            return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void SetZoneLoadStatus(string text)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => SetZoneLoadStatus(text)));
+            return;
+        }
+
+        if (_zoneLoadStatus is not null)
+            _zoneLoadStatus.Text = text;
     }
 
     private Button CreateZonePoolButton(string text, bool primary, Func<Task> action)
