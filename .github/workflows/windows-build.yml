@@ -145,6 +145,12 @@ jobs:
             if (-not $navigated) { throw 'Navigation smoke did not complete within 40 seconds.' }
             if (-not $resized) { throw 'Responsive resize smoke did not complete within 40 seconds.' }
             if ($startupText -match 'FATAL ') { throw 'WPF runtime smoke log contains a fatal exception.' }
+            if ($startupText -notmatch 'HEADLESS_PROTOCOL_SELFTEST PASS') {
+              throw 'NA2016 headless protocol selftest did not report PASS.'
+            }
+            if ($startupText -notmatch 'ZONE_TRANSFER_CAPTURE_SELFTEST PASS') {
+              throw 'NA2016 Zone transfer capture selftest did not report PASS.'
+            }
             if ($startupText -notmatch 'target=720x620 actual=720x620') {
               throw 'Responsive smoke did not actually reach the 720x620 breakpoint.'
             }
