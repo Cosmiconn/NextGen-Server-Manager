@@ -2,29 +2,45 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
-        <!-- Core palette: binding visual baseline for ui/navigation-redesign. -->
-        <SolidColorBrush x:Key="Bg" Color="#0B1018"/>
-        <SolidColorBrush x:Key="Panel" Color="#111923"/>
-        <SolidColorBrush x:Key="Panel2" Color="#182333"/>
-        <SolidColorBrush x:Key="Panel3" Color="#1E2C3F"/>
-        <SolidColorBrush x:Key="Border" Color="#2A3A4F"/>
-        <SolidColorBrush x:Key="BorderStrong" Color="#38506D"/>
-        <SolidColorBrush x:Key="Text" Color="#F4F7FB"/>
-        <SolidColorBrush x:Key="Muted" Color="#9AA9BC"/>
-        <SolidColorBrush x:Key="MutedStrong" Color="#B8C4D3"/>
-        <SolidColorBrush x:Key="Good" Color="#55D68B"/>
-        <SolidColorBrush x:Key="Warn" Color="#F3B84B"/>
-        <SolidColorBrush x:Key="Bad" Color="#FF667A"/>
-        <SolidColorBrush x:Key="Stopped" Color="#7F8A99"/>
-        <SolidColorBrush x:Key="Accent" Color="#3D8BFF"/>
-        <SolidColorBrush x:Key="AccentHover" Color="#5A9DFF"/>
-        <SolidColorBrush x:Key="AccentPressed" Color="#2575E8"/>
-        <SolidColorBrush x:Key="AccentSoft" Color="#17375F"/>
-        <SolidColorBrush x:Key="AccentBorder" Color="#4D96FF"/>
-        <SolidColorBrush x:Key="InputBg" Color="#0A1018"/>
-        <SolidColorBrush x:Key="TableAlt" Color="#0E1620"/>
-        <SolidColorBrush x:Key="TableHeader" Color="#172334"/>
-        <SolidColorBrush x:Key="TableGrid" Color="#243348"/>
+        <!-- Exact visual baseline for the 2026-10-05/06 target screenshot. -->
+        <SolidColorBrush x:Key="Bg" Color="#07111D"/>
+        <SolidColorBrush x:Key="Panel" Color="#0A1928"/>
+        <SolidColorBrush x:Key="Panel2" Color="#0D2034"/>
+        <SolidColorBrush x:Key="Panel3" Color="#12304F"/>
+        <SolidColorBrush x:Key="Border" Color="#173653"/>
+        <SolidColorBrush x:Key="BorderStrong" Color="#21517A"/>
+        <SolidColorBrush x:Key="Text" Color="#F4F8FC"/>
+        <SolidColorBrush x:Key="Muted" Color="#A4B5C9"/>
+        <SolidColorBrush x:Key="MutedStrong" Color="#C4D0DD"/>
+        <SolidColorBrush x:Key="Good" Color="#14D978"/>
+        <SolidColorBrush x:Key="Warn" Color="#EAA21A"/>
+        <SolidColorBrush x:Key="Bad" Color="#FF465C"/>
+        <SolidColorBrush x:Key="Stopped" Color="#65778C"/>
+        <SolidColorBrush x:Key="Accent" Color="#078CFF"/>
+        <SolidColorBrush x:Key="AccentHover" Color="#1699FF"/>
+        <SolidColorBrush x:Key="AccentPressed" Color="#0075DF"/>
+        <SolidColorBrush x:Key="AccentSoft" Color="#0A3967"/>
+        <SolidColorBrush x:Key="AccentBorder" Color="#139CFF"/>
+        <SolidColorBrush x:Key="InputBg" Color="#071522"/>
+        <SolidColorBrush x:Key="TableAlt" Color="#091725"/>
+        <SolidColorBrush x:Key="TableHeader" Color="#0D2236"/>
+        <SolidColorBrush x:Key="TableGrid" Color="#17334D"/>
+        <SolidColorBrush x:Key="Purple" Color="#A94DFF"/>
+        <SolidColorBrush x:Key="Cyan" Color="#16A8FF"/>
+
+        <LinearGradientBrush x:Key="HeaderGradient" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#0B233C" Offset="0"/>
+            <GradientStop Color="#0E2C49" Offset="0.55"/>
+            <GradientStop Color="#081522" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="SelectedNavGradient" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#129BFF" Offset="0"/>
+            <GradientStop Color="#087DE8" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="CardGradient" StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#102A43" Offset="0"/>
+            <GradientStop Color="#0C2135" Offset="1"/>
+        </LinearGradientBrush>
 
         <Style TargetType="Window">
             <Setter Property="Background" Value="{StaticResource Bg}"/>
@@ -42,54 +58,89 @@
             <Setter Property="Padding" Value="12,7"/>
             <Setter Property="Margin" Value="3"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="MinHeight" Value="30"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource Panel3}"/>
-                    <Setter Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
-                </Trigger>
-                <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Opacity" Value="0.48"/>
-                    <Setter Property="Cursor" Value="Arrow"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource Panel3}"/>
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.82"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <Style x:Key="PrimaryActionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="{StaticResource Accent}"/>
             <Setter Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource AccentHover}"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="{StaticResource AccentPressed}"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="Padding" Value="15,8"/>
         </Style>
 
         <Style x:Key="UtilityButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Padding" Value="9,5"/>
-            <Setter Property="MinHeight" Value="26"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="MinHeight" Value="34"/>
             <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Background" Value="{StaticResource Panel2}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrong}"/>
+        </Style>
+
+        <Style x:Key="WindowCaptionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="42"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontSize" Value="14"/>
         </Style>
 
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="{StaticResource InputBg}"/>
             <Setter Property="Foreground" Value="{StaticResource Text}"/>
             <Setter Property="BorderBrush" Value="{StaticResource BorderStrong}"/>
+            <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="CaretBrush" Value="{StaticResource Text}"/>
             <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="MinHeight" Value="30"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
 
         <Style TargetType="ComboBox">
             <Setter Property="Background" Value="{StaticResource InputBg}"/>
-            <Setter Property="Foreground" Value="#111111"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
             <Setter Property="BorderBrush" Value="{StaticResource BorderStrong}"/>
             <Setter Property="Padding" Value="6"/>
+            <Setter Property="MinHeight" Value="30"/>
+        </Style>
+
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="{StaticResource Panel2}"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="Padding" Value="8,5"/>
         </Style>
 
         <Style TargetType="CheckBox">
@@ -101,31 +152,39 @@
             <Setter Property="Background" Value="{StaticResource Panel}"/>
             <Setter Property="Foreground" Value="{StaticResource Text}"/>
             <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="RowBackground" Value="{StaticResource Panel}"/>
             <Setter Property="AlternatingRowBackground" Value="{StaticResource TableAlt}"/>
             <Setter Property="GridLinesVisibility" Value="Horizontal"/>
             <Setter Property="HorizontalGridLinesBrush" Value="{StaticResource TableGrid}"/>
+            <Setter Property="VerticalGridLinesBrush" Value="{StaticResource TableGrid}"/>
             <Setter Property="HeadersVisibility" Value="Column"/>
             <Setter Property="AutoGenerateColumns" Value="False"/>
             <Setter Property="CanUserAddRows" Value="False"/>
             <Setter Property="IsReadOnly" Value="True"/>
             <Setter Property="RowHeaderWidth" Value="0"/>
             <Setter Property="RowHeight" Value="32"/>
-            <Setter Property="ColumnHeaderHeight" Value="34"/>
+            <Setter Property="ColumnHeaderHeight" Value="32"/>
+            <Setter Property="SelectionUnit" Value="FullRow"/>
+            <Setter Property="SelectionMode" Value="Single"/>
         </Style>
 
         <Style TargetType="DataGridColumnHeader">
             <Setter Property="Background" Value="{StaticResource TableHeader}"/>
             <Setter Property="Foreground" Value="{StaticResource MutedStrong}"/>
             <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
-            <Setter Property="Padding" Value="9,7"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="Padding" Value="9,6"/>
+            <Setter Property="FontSize" Value="11"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
         </Style>
 
         <Style TargetType="DataGridCell">
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="7,4"/>
+            <Setter Property="BorderBrush" Value="{StaticResource TableGrid}"/>
+            <Setter Property="BorderThickness" Value="0,0,1,0"/>
+            <Setter Property="Padding" Value="8,3"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FontSize" Value="11"/>
             <Style.Triggers>
                 <Trigger Property="IsSelected" Value="True">
                     <Setter Property="Background" Value="{StaticResource AccentSoft}"/>
@@ -135,111 +194,178 @@
         </Style>
 
         <Style TargetType="TabControl">
-            <Setter Property="Background" Value="{StaticResource Bg}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid KeyboardNavigation.TabNavigation="Local">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <TabPanel Grid.Row="0" IsItemsHost="True" Background="Transparent"/>
+                            <ContentPresenter Grid.Row="1"
+                                              ContentSource="SelectedContent"
+                                              Margin="{TemplateBinding Padding}"
+                                              SnapsToDevicePixels="True"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <Style TargetType="TabItem">
             <Setter Property="Foreground" Value="{StaticResource MutedStrong}"/>
             <Setter Property="Background" Value="{StaticResource Panel}"/>
             <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
-            <Setter Property="Padding" Value="14,8"/>
-            <Style.Triggers>
-                <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Foreground" Value="{StaticResource Text}"/>
-                    <Setter Property="Background" Value="{StaticResource Panel2}"/>
-                    <Setter Property="FontWeight" Value="SemiBold"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="13,8"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4,4,0,0">
+                            <ContentPresenter ContentSource="Header"
+                                              Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource Panel2}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource Panel2}"/>
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
-        <!-- Reusable target-UI building blocks. These are intentionally opt-in so the
-             first redesign block cannot remove or change any existing command binding. -->
         <Style x:Key="ToolbarBorder" TargetType="Border">
             <Setter Property="Background" Value="{StaticResource Panel}"/>
             <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Padding" Value="10"/>
+            <Setter Property="CornerRadius" Value="5"/>
+            <Setter Property="Padding" Value="8"/>
         </Style>
 
         <Style x:Key="CardBorder" TargetType="Border">
             <Setter Property="Background" Value="{StaticResource Panel}"/>
             <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Padding" Value="12"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="10"/>
         </Style>
 
         <Style x:Key="SummaryCard" TargetType="Border" BasedOn="{StaticResource CardBorder}">
-            <Setter Property="Background" Value="{StaticResource Panel2}"/>
-            <Setter Property="Padding" Value="14,12"/>
+            <Setter Property="Background" Value="{StaticResource CardGradient}"/>
+            <Setter Property="Padding" Value="11,9"/>
         </Style>
 
         <Style x:Key="StatusPill" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource Panel2}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource BorderStrong}"/>
-            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="{StaticResource Panel3}"/>
             <Setter Property="CornerRadius" Value="999"/>
             <Setter Property="Padding" Value="9,3"/>
+            <Setter Property="MinWidth" Value="62"/>
         </Style>
 
         <Style x:Key="HeaderTitle" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource Text}"/>
-            <Setter Property="FontSize" Value="25"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="29"/>
+            <Setter Property="FontWeight" Value="Bold"/>
         </Style>
 
         <Style x:Key="SectionTitle" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource Text}"/>
-            <Setter Property="FontSize" Value="17"/>
+            <Setter Property="FontSize" Value="20"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
         </Style>
 
         <Style x:Key="MetaText" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource Muted}"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="11"/>
         </Style>
 
         <Style x:Key="PrimaryNavigationTab" TargetType="TabItem">
-            <Setter Property="Foreground" Value="{StaticResource MutedStrong}"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
             <Setter Property="Background" Value="{StaticResource Panel}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrong}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="18,11"/>
-            <Setter Property="Margin" Value="0,0,8,0"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource Panel2}"/>
-                    <Setter Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
-                </Trigger>
-                <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Foreground" Value="{StaticResource Text}"/>
-                    <Setter Property="Background" Value="{StaticResource Accent}"/>
-                    <Setter Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="Padding" Value="18,9"/>
+            <Setter Property="Margin" Value="0,0,5,0"/>
+            <Setter Property="Height" Value="61"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="5,5,0,0">
+                            <ContentPresenter ContentSource="Header"
+                                              Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Stretch"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource Panel3}"/>
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource SelectedNavGradient}"/>
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <Style x:Key="SecondaryNavigationTab" TargetType="TabItem">
             <Setter Property="Foreground" Value="{StaticResource MutedStrong}"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="Background" Value="{StaticResource Panel2}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrong}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="13,7"/>
-            <Setter Property="Margin" Value="0,0,6,0"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource Panel2}"/>
-                </Trigger>
-                <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Foreground" Value="{StaticResource Text}"/>
-                    <Setter Property="Background" Value="{StaticResource AccentSoft}"/>
-                    <Setter Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
-                    <Setter Property="FontWeight" Value="SemiBold"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="Padding" Value="14,7"/>
+            <Setter Property="Margin" Value="0,0,5,0"/>
+            <Setter Property="Height" Value="42"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="5">
+                            <ContentPresenter ContentSource="Header"
+                                              Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource Panel3}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource SelectedNavGradient}"/>
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentBorder}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Application.Resources>
 </Application>
