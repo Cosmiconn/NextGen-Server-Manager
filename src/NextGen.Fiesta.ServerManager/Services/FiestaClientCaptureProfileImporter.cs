@@ -65,7 +65,9 @@ public sealed class FiestaClientCaptureProfileImporter
                     x.ClientYear,
                     x.ClientVersion,
                     FileHash = x.FileHash ?? string.Empty,
-                    x.WorldId
+                    x.WorldId,
+                    WorldHost = x.WorldHost.ToUpperInvariant(),
+                    x.WorldPort
                 })
             .Select(g => g.First())
             .ToList();
@@ -98,7 +100,7 @@ public sealed class FiestaClientCaptureProfileImporter
             Profile = selected,
             Detail =
                 $"CLIENT CAPTURE PROFILE: SUCCESS · Login {selected.LoginHost}:{selected.LoginPort} · " +
-                $"Client {selected.ClientYear}/{selected.ClientVersion} · World {selected.WorldId} · " +
+                $"Client {selected.ClientYear}/{selected.ClientVersion} · World {selected.WorldId} → {selected.WorldHost}:{selected.WorldPort} · " +
                 $"FileHash {(string.IsNullOrWhiteSpace(selected.FileHash) ? "nicht gesendet" : "capture-derived")} · " +
                 $"tcp.stream={selected.TcpStreamId}."
         };
@@ -126,6 +128,17 @@ public sealed class FiestaClientCaptureProfileImporter
             versionBody[2] = (byte)(version & 0xff);
             versionBody[3] = (byte)(version >> 8);
 
+            const string worldHost = "127.0.0.1";
+            const ushort worldPort = 9013;
+
+            var worldRedirectBody = new byte[83];
+            worldRedirectBody[0] = 1;
+            FiestaHeadlessLoadClient.WriteFixedAscii(worldRedirectBody.AsSpan(1, 16), worldHost);
+            worldRedirectBody[17] = (byte)(worldPort & 0xff);
+            worldRedirectBody[18] = (byte)(worldPort >> 8);
+            FiestaHeadlessLoadClient.WriteFixedAscii(worldRedirectBody.AsSpan(19, 32), "0123456789abcdef0123456789abcdef");
+            var worldRedirectPayload = BuildPayload(3, 12, worldRedirectBody);
+
             var fileHashBytes = Encoding.ASCII.GetBytes(fileHash + "\0");
             var clientPayloads = new[]
             {
@@ -144,7 +157,9 @@ public sealed class FiestaClientCaptureProfileImporter
                 clientStream.Write(frame);
             }
 
-            var serverFrame = FiestaWireConnection.FramePayload(handshakePayload);
+            var serverStream = new MemoryStream();
+            serverStream.Write(FiestaWireConnection.FramePayload(handshakePayload));
+            serverStream.Write(FiestaWireConnection.FramePayload(worldRedirectPayload));
             var follow =
                 "===================================================================\n" +
                 "Follow: tcp,raw\n" +
@@ -152,7 +167,7 @@ public sealed class FiestaClientCaptureProfileImporter
                 "Node 0: 127.0.0.1:55001\n" +
                 "Node 1: 127.0.0.1:9010\n" +
                 Convert.ToHexString(clientStream.ToArray()).ToLowerInvariant() + "\n" +
-                "\t" + Convert.ToHexString(serverFrame).ToLowerInvariant() + "\n" +
+                "\t" + Convert.ToHexString(serverStream.ToArray()).ToLowerInvariant() + "\n" +
                 "===================================================================\n";
 
             var profile = TryExtractFromFollowText(follow, 9, 9010)
@@ -163,11 +178,13 @@ public sealed class FiestaClientCaptureProfileImporter
                 || profile.ClientYear != year
                 || profile.ClientVersion != version
                 || profile.WorldId != worldId
+                || profile.WorldHost != worldHost
+                || profile.WorldPort != worldPort
                 || profile.FileHash != fileHash
                 || profile.XorPosition != xorPosition)
             {
                 throw new InvalidDataException(
-                    "Capture-Profil veränderte Login-Endpoint, Version, FileHash, World-ID oder XOR-Position.");
+                    "Capture-Profil veränderte Login-/World-Endpoint, Version, FileHash, World-ID oder XOR-Position.");
             }
 
             return new FiestaClientCaptureProfileSelfTestResult(
@@ -207,17 +224,25 @@ public sealed class FiestaClientCaptureProfileImporter
 
         var serverFrames = ParseFrames(serverData);
         FiestaPacket? handshake = null;
+        string? worldHost = null;
+        int? worldPort = null;
         foreach (var frame in serverFrames)
         {
             var packet = FiestaPacket.FromPayload(frame);
             if (packet.Header == 2 && packet.Type == 7 && packet.Body.Length >= 2)
             {
                 handshake = packet;
-                break;
+                continue;
+            }
+
+            if (packet.Header == 3 && packet.Type == 12 && packet.Body.Length >= 19)
+            {
+                worldHost = FiestaHeadlessLoadClient.ReadFixedAscii(packet.Body.AsSpan(1, 16));
+                worldPort = packet.Body[17] | (packet.Body[18] << 8);
             }
         }
 
-        if (!handshake.HasValue)
+        if (!handshake.HasValue || string.IsNullOrWhiteSpace(worldHost) || !worldPort.HasValue)
             return null;
 
         var xorPosition = handshake.Value.Body[0] | (handshake.Value.Body[1] << 8);
@@ -273,6 +298,8 @@ public sealed class FiestaClientCaptureProfileImporter
             ClientVersion = clientVersion.Value,
             FileHash = fileHash,
             WorldId = worldId.Value,
+            WorldHost = worldHost,
+            WorldPort = worldPort.Value,
             TcpStreamId = streamId,
             XorPosition = xorPosition
         };
@@ -511,6 +538,8 @@ public sealed record FiestaCapturedClientProfile
     public ushort ClientVersion { get; init; }
     public string? FileHash { get; init; }
     public byte WorldId { get; init; }
+    public string WorldHost { get; init; } = string.Empty;
+    public int WorldPort { get; init; }
     public int TcpStreamId { get; init; } = -1;
     public int XorPosition { get; init; }
     public string SourceCaptureSha256 { get; init; } = string.Empty;
@@ -534,6 +563,8 @@ public sealed record FiestaCapturedClientProfile
             throw new InvalidDataException("LoginPort liegt außerhalb 1..65535.");
         if (ClientYear == 0 || ClientVersion == 0)
             throw new InvalidDataException("ClientYear/ClientVersion fehlen im Capture-Profil.");
+        if (string.IsNullOrWhiteSpace(WorldHost) || WorldPort is <= 0 or > 65535)
+            throw new InvalidDataException("WorldHost/WorldPort fehlen im Capture-Profil.");
         if (TcpStreamId < 0)
             throw new InvalidDataException("TcpStreamId fehlt im Capture-Profil.");
         if (XorPosition is < 0 or >= FiestaXorCipher.TableLength)
