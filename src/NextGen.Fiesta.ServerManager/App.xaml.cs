@@ -69,6 +69,11 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(captureSelfTest.Detail);
             Log("ZONE_TRANSFER_CAPTURE_SELFTEST PASS · " + captureSelfTest.Detail);
 
+            var clientCaptureSelfTest = FiestaClientCaptureProfileImporter.RunSelfTest();
+            if (!clientCaptureSelfTest.Success)
+                throw new InvalidOperationException(clientCaptureSelfTest.Detail);
+            Log("CLIENT_CAPTURE_PROFILE_SELFTEST PASS · " + clientCaptureSelfTest.Detail);
+
             var originalWidth = window.Width;
             var originalHeight = window.Height;
             var targets = new (double Width, double Height)[]
