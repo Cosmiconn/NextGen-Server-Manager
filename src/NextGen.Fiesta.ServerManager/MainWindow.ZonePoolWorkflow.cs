@@ -111,7 +111,8 @@ public partial class MainWindow
         {
             Text = "Profil: ShinePlayer 2000 · ShineMob 12000 · ShineNPC 512. " +
                    "Mob 9057/12000 und NPC 293/512 wurden real stabil gemessen; Player >1500 Lasttest ist noch offen. " +
-                   "Die GUI verwendet ausschließlich den hashgebundenen Offline-/Testdeployment-Pfad; Live-/In-Place-Patching bleibt gesperrt.",
+                   "Für den Player-Test wird ausschließlich die ausgewählte zertifizierte Zone transaktional auf 2000 Client-Sessions gesetzt; Stock-Zonen bleiben bei 1500. " +
+                   "Live-/In-Place-Patching bleibt gesperrt.",
             Foreground = (Brush)FindResource("Muted"),
             FontSize = 10,
             TextWrapping = TextWrapping.Wrap,
@@ -155,20 +156,33 @@ public partial class MainWindow
             () => RunZonePoolUiActionAsync("Preflight", RunZonePoolPreflightAsync)));
         prepareRow.Children.Add(CreateZonePoolButton("3 · Testprofil installieren", false,
             () => RunZonePoolUiActionAsync("Testdeployment", DeployZonePoolTestProfileAsync)));
-        prepareRow.Children.Add(CreateZonePoolButton("4 · Log-Checkpoint", false,
+        prepareRow.Children.Add(CreateZonePoolButton("4 · Listener 2000 aktivieren", false,
+            () => RunZonePoolUiActionAsync("Listener 2000", EnableZonePoolListenerAsync)));
+        prepareRow.Children.Add(CreateZonePoolButton("5 · Log-Checkpoint", false,
             () => RunZonePoolUiActionAsync("Log-Checkpoint", SaveZonePoolLogCheckpointAsync)));
         stack.Children.Add(prepareRow);
 
-        var verifyRow = new WrapPanel();
-        verifyRow.Children.Add(CreateZonePoolButton("5 · Runtime prüfen", true,
+        var verifyRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+        verifyRow.Children.Add(CreateZonePoolButton("6 · Runtime prüfen", true,
             () => RunZonePoolUiActionAsync("Runtime-Verifikation", VerifyZonePoolRuntimeAsync)));
-        verifyRow.Children.Add(CreateZonePoolButton("6 · 5-Minuten-Stabilität", false,
+        verifyRow.Children.Add(CreateZonePoolButton("7 · 5-Minuten-Stabilität", false,
             () => RunZonePoolUiActionAsync("Stabilitätswache", WatchZonePoolStabilityAsync)));
-        verifyRow.Children.Add(CreateZonePoolButton("7 · Log-Audit", false,
+        verifyRow.Children.Add(CreateZonePoolButton("8 · Log-Audit", false,
             () => RunZonePoolUiActionAsync("Log-Audit", AuditZonePoolLogsAsync)));
-        verifyRow.Children.Add(CreateZonePoolButton("8 · Rollback auf Stock", false,
-            () => RunZonePoolUiActionAsync("Rollback", RollbackZonePoolTestAsync)));
         stack.Children.Add(verifyRow);
+
+        var rollbackRow = new WrapPanel();
+        rollbackRow.Children.Add(CreateZonePoolButton("9 · Komplett-Rollback auf Stock", false,
+            () => RunZonePoolUiActionAsync("Komplett-Rollback", RollbackZonePoolTestAsync)));
+        rollbackRow.Children.Add(new TextBlock
+        {
+            Text = "Rollback-Reihenfolge ist fest: zuerst Listener/ServerInfo 1500, danach Zone.exe Stock.",
+            Foreground = (Brush)FindResource("Muted"),
+            FontSize = 9,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0)
+        });
+        stack.Children.Add(rollbackRow);
         return card;
     }
 
@@ -283,7 +297,33 @@ public partial class MainWindow
             if (!preflight.Ready) throw new InvalidOperationException(preflight.Detail);
             var result = new ZonePoolSingleZoneTestDeployment().Deploy(target, patched, ZonePoolDeployConfirmation);
             if (!result.Success) throw new InvalidOperationException(result.Detail);
-            return $"TESTDEPLOYMENT SUCCESS · {ShortHash(result.TargetSha256)} · Zone jetzt normal über den Manager starten.";
+            return $"TESTDEPLOYMENT SUCCESS · {ShortHash(result.TargetSha256)} · noch NICHT starten: zuerst Schritt 4 Listener 2000 und Schritt 5 Log-Checkpoint.";
+        });
+    }
+
+    private async Task<string> EnableZonePoolListenerAsync()
+    {
+        var target = RequireZonePoolTarget();
+        var service = new ZoneClientListenerTestConfiguration();
+        var readiness = await Task.Run(() => service.AnalyzeApplyReadiness(target));
+        if (!readiness.Ready) throw new InvalidOperationException(readiness.Detail);
+
+        var entry = readiness.TargetEntry;
+        var answer = MessageBox.Show(this,
+            $"Nur die ausgewählte zertifizierte Test-Zone wird in ServerInfo.txt von 1500 auf 2000 Client-Sessions gesetzt.\n\n" +
+            $"Ziel: {entry?.Name ?? Path.GetFileName(Path.GetDirectoryName(target))} · World {entry?.WorldNo} · Zone {entry?.ZoneNo}\n" +
+            "Alle anderen Zone-Listener bleiben unverändert. Backup und Manifest sind verpflichtend; KEINE Zone.exe darf laufen. " +
+            "Es wird kein Prozess automatisch gestartet.\n\nFortfahren?",
+            "Zertifizierten Zone-Listener 2000 aktivieren", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.Yes) return "Listener-Aktivierung vom Benutzer abgebrochen.";
+
+        return await Task.Run(() =>
+        {
+            var result = new ZoneClientListenerTestConfiguration().Apply(
+                target,
+                ZoneClientListenerTestConfiguration.ApplyConfirmationToken);
+            if (!result.Success || !result.Applied) throw new InvalidOperationException(result.Detail);
+            return $"LISTENER 2000 APPLIED · nur Zone {result.Readiness?.ZoneNo} · ServerInfo Backup/Manifest verifiziert · jetzt Schritt 5 Log-Checkpoint, danach Test-Zone manuell starten.";
         });
     }
 
@@ -300,7 +340,7 @@ public partial class MainWindow
             var result = new ZonePoolRuntimeLogDeltaAudit().SaveCheckpoint(vm.ServerRoot, checkpoint);
             if (!result.Success) throw new InvalidOperationException(result.Detail);
             _zonePoolCheckpointPath = checkpoint;
-            return $"LOG CHECKPOINT SUCCESS · {result.FileCount} Logs · {Path.GetFileName(checkpoint)}";
+            return $"LOG CHECKPOINT SUCCESS · {result.FileCount} Logs · {Path.GetFileName(checkpoint)} · Test-Zone kann jetzt manuell gestartet werden.";
         });
     }
 
@@ -388,16 +428,86 @@ public partial class MainWindow
     {
         var target = RequireZonePoolTarget();
         var answer = MessageBox.Show(this,
-            "Die ausgewählte Test-Zone wird auf das verifizierte NA2016-Stock-Backup zurückgesetzt.\n\nKEINE Zone.exe darf laufen. Fortfahren?",
-            "Zone-Pool Rollback", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (answer != MessageBoxResult.Yes) return "Rollback vom Benutzer abgebrochen.";
+            "Der komplette Ein-Zonen-Test wird sicher zurückgesetzt.\n\n" +
+            "Reihenfolge: (1) Listener/ServerInfo zurück auf 1500, (2) Zone.exe zurück auf die verifizierte NA2016-Baseline. " +
+            "Wenn der Listener bereits Stock ist, wird das vor dem Binary-Rollback erneut geprüft.\n\nKEINE Zone.exe darf laufen. Fortfahren?",
+            "Zone-Pool Komplett-Rollback", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.Yes) return "Komplett-Rollback vom Benutzer abgebrochen.";
 
         return await Task.Run(() =>
         {
+            var listener = new ZoneClientListenerTestConfiguration().Rollback(
+                target,
+                ZoneClientListenerTestConfiguration.RollbackConfirmationToken);
+
+            string listenerStatus;
+            if (listener.Success)
+            {
+                listenerStatus = "Listener 1500 wiederhergestellt";
+            }
+            else
+            {
+                if (!IsZoneListenerStock(target, out var stockDetail))
+                    throw new InvalidOperationException("Listener-Rollback konnte nicht sicher abgeschlossen werden: " + listener.Detail + " " + stockDetail);
+                listenerStatus = "Listener bereits verifiziert auf Stock 1500";
+            }
+
             var result = new ZonePoolSingleZoneTestDeployment().Rollback(target, ZonePoolRollbackConfirmation);
             if (!result.Success) throw new InvalidOperationException(result.Detail);
-            return $"TESTROLLBACK SUCCESS · Stock {ShortHash(result.TargetSha256)} wiederhergestellt.";
+            return $"KOMPLETT-ROLLBACK SUCCESS · {listenerStatus} · Zone.exe Stock {ShortHash(result.TargetSha256)} wiederhergestellt.";
         });
+    }
+
+    private static bool IsZoneListenerStock(string targetZoneExePath, out string detail)
+    {
+        detail = string.Empty;
+        try
+        {
+            var zoneDirectory = new DirectoryInfo(Path.GetDirectoryName(Path.GetFullPath(targetZoneExePath))!);
+            if (!zoneDirectory.Name.StartsWith("Zone", StringComparison.OrdinalIgnoreCase) ||
+                !int.TryParse(zoneDirectory.Name.AsSpan(4), out var zoneNo))
+            {
+                detail = "Zielordner kann nicht eindeutig als ZoneNN aufgelöst werden.";
+                return false;
+            }
+
+            var serverRoot = zoneDirectory.Parent;
+            if (serverRoot is null)
+            {
+                detail = "Server-Root kann nicht aus dem Zielordner abgeleitet werden.";
+                return false;
+            }
+
+            var serverInfoPath = Path.Combine(serverRoot.FullName, "9Data", "ServerInfo", "ServerInfo.txt");
+            if (!File.Exists(serverInfoPath))
+            {
+                detail = "ServerInfo.txt fehlt; Stockzustand kann nicht bewiesen werden.";
+                return false;
+            }
+
+            var candidates = new ServerInfoParser().Parse(serverInfoPath)
+                .Where(x => x.ServerType == 6 && x.ZoneNo == zoneNo && x.ConnectionKind == 20)
+                .ToList();
+            if (candidates.Count != 1)
+            {
+                detail = $"Client-Listener der Zone {zoneNo} ist nicht eindeutig (Treffer: {candidates.Count}).";
+                return false;
+            }
+
+            if (candidates[0].MaxAccept != ZoneClientListenerTestConfiguration.StockMaxAccept)
+            {
+                detail = $"Client-Listener steht noch auf {candidates[0].MaxAccept:N0} statt Stock {ZoneClientListenerTestConfiguration.StockMaxAccept:N0}.";
+                return false;
+            }
+
+            detail = $"Zone {zoneNo} Client-Listener steht verifiziert auf Stock {ZoneClientListenerTestConfiguration.StockMaxAccept:N0}.";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            detail = "Stockprüfung des Zone-Listeners fehlgeschlagen: " + ex.Message;
+            return false;
+        }
     }
 
     private string RequireZonePoolTarget()
