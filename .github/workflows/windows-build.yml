@@ -154,6 +154,12 @@ jobs:
             if ($startupText -notmatch 'CLIENT_CAPTURE_PROFILE_SELFTEST PASS') {
               throw 'NA2016 client capture profile selftest did not report PASS.'
             }
+            if ($startupText -notmatch 'CHARACTER_CREATE_CAPTURE_SELFTEST PASS') {
+              throw 'NA2016 CharacterCreate capture selftest did not report PASS.'
+            }
+            if ($startupText -notmatch 'LOAD_IDENTITY_SELFTEST PASS') {
+              throw 'NA2016 load identity generator selftest did not report PASS.'
+            }
             if ($startupText -notmatch 'target=720x620 actual=720x620') {
               throw 'Responsive smoke did not actually reach the 720x620 breakpoint.'
             }
