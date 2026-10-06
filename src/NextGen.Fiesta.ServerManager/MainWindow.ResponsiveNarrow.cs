@@ -1,0 +1,91 @@
+using System.Runtime.CompilerServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
+
+namespace NextGen.Fiesta.ServerManager;
+
+public partial class MainWindow
+{
+    private static readonly ConditionalWeakTable<MainWindow, object> NarrowResponsiveWindows = new();
+    private static readonly bool NarrowResponsiveHookRegistered = RegisterNarrowResponsiveHook();
+
+    private static bool RegisterNarrowResponsiveHook()
+    {
+        EventManager.RegisterClassHandler(
+            typeof(MainWindow),
+            FrameworkElement.LoadedEvent,
+            new RoutedEventHandler(OnNarrowResponsiveLoaded));
+        return true;
+    }
+
+    private static void OnNarrowResponsiveLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MainWindow window || NarrowResponsiveWindows.TryGetValue(window, out _))
+            return;
+
+        NarrowResponsiveWindows.Add(window, new object());
+        window.SizeChanged += (_, _) => window.Dispatcher.BeginInvoke(
+            new Action(() => ApplyNarrowResponsiveLayout(window)),
+            DispatcherPriority.Background);
+
+        window.Dispatcher.BeginInvoke(
+            new Action(() =>
+            {
+                var workArea = SystemParameters.WorkArea;
+                window.MinWidth = Math.Min(1024, Math.Max(640, workArea.Width - 24));
+                window.MinHeight = Math.Min(680, Math.Max(520, workArea.Height - 24));
+                FitResponsiveWindowToWorkArea(window, workArea);
+                ApplyNarrowResponsiveLayout(window);
+            }),
+            DispatcherPriority.ContextIdle);
+    }
+
+    private static void ApplyNarrowResponsiveLayout(MainWindow window)
+    {
+        var width = window.ActualWidth > 0 ? window.ActualWidth : window.Width;
+        var main = window._mainNavigation;
+        if (main is null || width <= 0)
+            return;
+
+        var available = Math.Max(560, width - 32);
+        var mainTabWidth = Math.Max(130, (available - 24) / 4.0);
+        for (var i = 0; i < Math.Min(4, main.Items.Count); i++)
+        {
+            if (main.Items[i] is TabItem tab)
+                tab.Width = mainTabWidth;
+        }
+
+        if (main.Items.Count > 1 && main.Items[1] is TabItem server && server.Content is TabControl serverSub)
+            ResizeVisibleSubTabs(serverSub, width, 3, 165, 270);
+
+        if (main.Items.Count > 2 && main.Items[2] is TabItem diagnostic && diagnostic.Content is TabControl diagnosticSub)
+            ResizeVisibleSubTabs(diagnosticSub, width, 3, 155, 215);
+
+        if (main.Items.Count > 3 && main.Items[3] is TabItem tools && tools.Content is TabControl toolsSub)
+            ResizeVisibleSubTabs(toolsSub, width, Math.Max(1, toolsSub.Items.Count), 150, 220);
+    }
+
+    private static void ResizeVisibleSubTabs(TabControl navigation, double windowWidth, int visibleCount, double minWidth, double referenceMaxWidth)
+    {
+        if (visibleCount <= 0)
+            return;
+
+        var available = Math.Max(480, windowWidth - 64);
+        var target = windowWidth >= 1180
+            ? referenceMaxWidth
+            : Math.Max(minWidth, (available - ((visibleCount - 1) * 6.0)) / visibleCount);
+
+        var resized = 0;
+        foreach (var item in navigation.Items.OfType<TabItem>())
+        {
+            if (item.Width <= 0 || item.Opacity <= 0)
+                continue;
+
+            item.Width = target;
+            resized++;
+            if (resized >= visibleCount)
+                break;
+        }
+    }
+}
