@@ -252,7 +252,7 @@ public sealed class FiestaZoneTransferCaptureImporter
 
         var serverFrames = ParseFrames(nodeData[serverNode].ToArray());
         var handshake = serverFrames
-            .Select(FiestaPacket.FromPayload)
+            .Select(x => FiestaPacket.FromPayload(x))
             .FirstOrDefault(x => x.Header == 2 && x.Type == 7 && x.Body.Length >= 2);
 
         if (handshake.Body is null || handshake.Body.Length < 2)
