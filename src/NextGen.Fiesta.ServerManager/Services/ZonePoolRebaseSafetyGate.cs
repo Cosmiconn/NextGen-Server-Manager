@@ -14,6 +14,7 @@ public sealed class ZonePoolRebaseSafetyGate
     private readonly ZoneAllocatorCallInventoryAudit _allocatorInventory = new();
     private readonly ZoneAllocatorDynamicPathAudit _dynamicAllocatorPaths = new();
     private readonly ZonePoolConstantCoverageAudit _constantCoverage = new();
+    private readonly ZonePoolConstantSemanticAudit _constantSemantics = new();
     private readonly ZoneNpcPoolCoverageAudit _npcCoverage = new();
     private readonly ZonePoolPatchManifest _patchManifest = new();
 
@@ -40,6 +41,7 @@ public sealed class ZonePoolRebaseSafetyGate
         var inventory = _allocatorInventory.Analyze(zoneExePath);
         var dynamicPaths = _dynamicAllocatorPaths.Analyze(zoneExePath);
         var constantCoverage = _constantCoverage.Analyze(zoneExePath);
+        var constantSemantics = _constantSemantics.Analyze(zoneExePath, playerCapacity, mobCapacity, npcCapacity);
         var npcCoverage = _npcCoverage.Analyze(zoneExePath, npcCapacity);
         var manifest = _patchManifest.Build(zoneExePath, playerCapacity, mobCapacity, npcCapacity);
 
@@ -62,6 +64,7 @@ public sealed class ZonePoolRebaseSafetyGate
         var fullCoverageCertified = baselineProofsOk
                                     && constantCoverage.HashMatches
                                     && constantCoverage.InventoryVerified
+                                    && constantSemantics.SemanticCoverageVerified
                                     && npcCoverage.CoverageVerified
                                     && manifest.ManifestVerified
                                     && manifest.NoOverlaps
@@ -78,7 +81,7 @@ public sealed class ZonePoolRebaseSafetyGate
         var status = !baselineProofsOk
             ? "Mindestens ein hash-/bytegebundener Basisbeweis ist fehlgeschlagen. Kein Binärschreibpfad zulässig."
             : fullCoverageCertified
-                ? "Player/Mob/NPC-Rebase-Coverage ist für den verifizierten NA2016-Zone-Build vollständig zertifiziert: Konstanten-Inventur, NPC-Strukturpfade und 83-Site-Offline-Manifest inklusive bytegenauem Rollback sind grün. Binärschreiben bleibt gesperrt, bis der atomare Offline-Writer separat zertifiziert ist."
+                ? "Player/Mob/NPC-Rebase-Coverage ist für den verifizierten NA2016-Zone-Build vollständig zertifiziert: alle rebase-sensitiven Konstanten sind inventarisiert, sämtliche 0x1F40/0x05DC-Codevorkommen semantisch als PATCH oder bewusst unverändert klassifiziert, NPC-Strukturpfade sind geschlossen und das 83-Site-Offline-Manifest inklusive bytegenauem Rollback ist grün. Binärschreiben bleibt gesperrt, bis der atomare Offline-Writer separat zertifiziert ist."
                 : "Basisbeweise sind grün, aber die vollständige Rebase-Coverage ist noch nicht zertifiziert. Kein Binärschreibpfad zulässig.";
 
         return new ZonePoolRebaseSafetyGateResult
@@ -91,6 +94,7 @@ public sealed class ZonePoolRebaseSafetyGate
             AllocatorInventory = inventory,
             DynamicAllocatorPaths = dynamicPaths,
             ConstantCoverage = constantCoverage,
+            ConstantSemantics = constantSemantics,
             NpcCoverage = npcCoverage,
             PatchManifest = manifest,
             BaselineProofsVerified = baselineProofsOk,
@@ -112,6 +116,7 @@ public sealed class ZonePoolRebaseSafetyGateResult
     public ZoneAllocatorCallInventoryAuditResult? AllocatorInventory { get; init; }
     public ZoneAllocatorDynamicPathAuditResult? DynamicAllocatorPaths { get; init; }
     public ZonePoolConstantCoverageAuditResult? ConstantCoverage { get; init; }
+    public ZonePoolConstantSemanticAuditResult? ConstantSemantics { get; init; }
     public ZoneNpcPoolCoverageAuditResult? NpcCoverage { get; init; }
     public ZonePoolPatchManifestResult? PatchManifest { get; init; }
     public bool BaselineProofsVerified { get; init; }
