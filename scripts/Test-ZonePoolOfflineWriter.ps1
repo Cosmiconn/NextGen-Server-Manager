@@ -35,12 +35,17 @@ Beispiel:
 "@
 }
 
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    throw "Dieses .NET-8-Testscript benoetigt PowerShell 7 oder neuer (pwsh). Aktuell: PowerShell $($PSVersionTable.PSVersion). Starte 'pwsh' und fuehre den Befehl dort erneut aus."
+}
+
 $zonePath = (Resolve-Path -LiteralPath $ZoneExe).Path
 $assemblyPath = Resolve-ManagerAssembly -ExplicitPath $ManagerAssembly
 
 Write-Host 'NextGen Zone Pool Offline Writer - isolierter Selbsttest'
 Write-Host "Zone.exe: $zonePath"
 Write-Host "Manager:  $assemblyPath"
+Write-Host "PowerShell: $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
 Write-Host ''
 Write-Host 'WICHTIG: Der Test verweigert die Ausfuehrung, sobald ein Zone-Prozess laeuft.'
 Write-Host 'Die originale Zone.exe wird niemals ueberschrieben; gearbeitet wird nur in einem temporaeren Verzeichnis.'
@@ -49,10 +54,11 @@ Write-Host ''
 $assemblyDirectory = Split-Path -Parent $assemblyPath
 Push-Location $assemblyDirectory
 try {
-    [void][System.Reflection.Assembly]::LoadFrom($assemblyPath)
-    $type = [Type]::GetType(
-        'NextGen.Fiesta.ServerManager.Services.ZonePoolOfflineWriterSelfTest, NextGen.Fiesta.ServerManager',
-        $true)
+    $assembly = [System.Reflection.Assembly]::LoadFrom($assemblyPath)
+    $type = $assembly.GetType(
+        'NextGen.Fiesta.ServerManager.Services.ZonePoolOfflineWriterSelfTest',
+        $true,
+        $false)
     $test = [Activator]::CreateInstance($type)
     $result = $type.GetMethod('Run').Invoke($test, @($zonePath))
 
