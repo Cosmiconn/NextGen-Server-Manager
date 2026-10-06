@@ -5,8 +5,7 @@ namespace NextGen.Fiesta.ServerManager.Services;
 /// <summary>
 /// Explicit diagnostic self-test for the guarded offline writer.
 /// It targets only the verified 2000/12000/512 profile, operates in a fresh temporary
-/// directory, validates the independently established target SHA-256, rolls the generated
-/// copy back to the stock SHA-256 and removes the temporary artifacts afterwards.
+/// directory, independently verifies the generated copy, then rolls it back to stock.
 /// </summary>
 public sealed class ZonePoolOfflineWriterSelfTest
 {
@@ -18,6 +17,7 @@ public sealed class ZonePoolOfflineWriterSelfTest
     public const string ExpectedPatchedSha256 = "B8A6688A5648FB39363D7A39B64794DD42095F51D0A4205E40FC332147783EAC";
 
     private readonly ZonePoolOfflinePatchWriter _writer = new();
+    private readonly ZonePoolPatchedCopyVerifier _verifier = new();
 
     public ZonePoolOfflineWriterSelfTestResult Run(string baselineZoneExePath)
     {
@@ -35,53 +35,51 @@ public sealed class ZonePoolOfflineWriterSelfTest
 
         try
         {
-            var create = _writer.CreatePatchedCopy(
-                source,
-                output,
-                PlayerTarget,
-                MobTarget,
-                NpcTarget);
+            var create = _writer.CreatePatchedCopy(source, output, PlayerTarget, MobTarget, NpcTarget);
             if (!create.Success)
                 return Failed("Patchkopie konnte nicht erzeugt werden: " + create.Detail, create, testDirectory);
-            if (create.SafetyGate?.FullCoverageCertified != true)
-                return Failed("Writer meldete Erfolg ohne FullCoverageCertified.", create, testDirectory);
-            if (create.SafetyGate?.OfflineWriterCertified != true)
-                return Failed("Writer meldete Erfolg ohne OfflineWriterCertified.", create, testDirectory);
-            if (create.SafetyGate?.CanCreateOfflinePatchedCopy != true)
-                return Failed("Writer meldete Erfolg ohne CanCreateOfflinePatchedCopy.", create, testDirectory);
-            if (create.SafetyGate?.CanWriteBinary != false)
-                return Failed("Safety-Gate hat Live-/In-Place-Binärschreiben unerwartet freigegeben.", create, testDirectory);
-            if (!File.Exists(output))
-                return Failed("Writer meldete Erfolg, aber die Patchkopie fehlt.", create, testDirectory);
+            if (create.SafetyGate?.FullCoverageCertified != true
+                || create.SafetyGate.OfflineWriterCertified != true
+                || create.SafetyGate.CanCreateOfflinePatchedCopy != true
+                || create.SafetyGate.CanWriteBinary != false)
+                return Failed("Writer-Safety-Gate befindet sich nicht im erwarteten Offline-only-Zustand.", create, testDirectory);
+
+            var verify = _verifier.Verify(output);
+            if (!verify.Success)
+                return Failed("Unabhängige Patchkopie-Verifikation fehlgeschlagen: " + verify.Detail, create, testDirectory, verification: verify);
+            if (verify.VerifiedSiteCount != create.ChangedSiteCount)
+                return Failed($"Verifier-Sitezahl {verify.VerifiedSiteCount} weicht vom Writer {create.ChangedSiteCount} ab.", create, testDirectory, verification: verify);
 
             var patchedHash = Sha256File(output);
-            if (!patchedHash.Equals(ExpectedPatchedSha256, StringComparison.OrdinalIgnoreCase))
-                return Failed($"Patchkopie besitzt unerwarteten SHA-256: {patchedHash}", create, testDirectory);
-            if (!patchedHash.Equals(create.PatchedSha256, StringComparison.OrdinalIgnoreCase))
-                return Failed("Writer-Rückgabewert und tatsächlicher Patch-SHA unterscheiden sich.", create, testDirectory);
+            if (!patchedHash.Equals(ExpectedPatchedSha256, StringComparison.OrdinalIgnoreCase)
+                || !patchedHash.Equals(create.PatchedSha256, StringComparison.OrdinalIgnoreCase)
+                || !patchedHash.Equals(verify.PatchedSha256, StringComparison.OrdinalIgnoreCase))
+                return Failed($"Patchkopie besitzt unerwarteten SHA-256: {patchedHash}", create, testDirectory, verification: verify);
 
             var restore = _writer.RestoreGeneratedCopyToBaseline(output);
             if (!restore.Success)
-                return Failed("Rollback der erzeugten Kopie fehlgeschlagen: " + restore.Detail, create, testDirectory, restore);
+                return Failed("Rollback der erzeugten Kopie fehlgeschlagen: " + restore.Detail, create, testDirectory, restore, verify);
 
             var rolledBackHash = Sha256File(output);
             if (!rolledBackHash.Equals(ExpectedBaselineSha256, StringComparison.OrdinalIgnoreCase))
-                return Failed($"Rollback-Datei besitzt unerwarteten SHA-256: {rolledBackHash}", create, testDirectory, restore);
+                return Failed($"Rollback-Datei besitzt unerwarteten SHA-256: {rolledBackHash}", create, testDirectory, restore, verify);
 
             var sourceHashAfter = Sha256File(source);
             if (!sourceHashAfter.Equals(sourceHashBefore, StringComparison.OrdinalIgnoreCase))
-                return Failed("Die originale Baseline-Datei wurde während des Selbsttests verändert.", create, testDirectory, restore);
+                return Failed("Die originale Baseline-Datei wurde während des Selbsttests verändert.", create, testDirectory, restore, verify);
 
             return new ZonePoolOfflineWriterSelfTestResult
             {
                 Success = true,
                 CreateResult = create,
+                VerificationResult = verify,
                 RestoreResult = restore,
                 BaselineSha256 = sourceHashAfter,
                 PatchedSha256 = patchedHash,
                 RollbackSha256 = rolledBackHash,
                 TemporaryDirectory = testDirectory,
-                Detail = $"SELFTEST OK: Offline-COPY zertifiziert, Live/In-Place weiterhin gesperrt, Patch SHA {patchedHash}, Rollback SHA {rolledBackHash}, Original unverändert. Testartefakte werden entfernt."
+                Detail = $"SELFTEST OK: Offline-COPY zertifiziert und unabhängig rückverifiziert ({verify.VerifiedSiteCount} geänderte Sites), " +
+                         $"Live/In-Place weiterhin gesperrt, Patch SHA {patchedHash}, Rollback SHA {rolledBackHash}, Original unverändert."
             };
         }
         catch (Exception ex)
@@ -95,11 +93,7 @@ public sealed class ZonePoolOfflineWriterSelfTest
                 if (Directory.Exists(testDirectory))
                     Directory.Delete(testDirectory, recursive: true);
             }
-            catch
-            {
-                // Cleanup failure must not alter patch/rollback verdict; caller receives
-                // the temporary directory path and can remove it manually if required.
-            }
+            catch { }
         }
     }
 
@@ -113,12 +107,14 @@ public sealed class ZonePoolOfflineWriterSelfTest
         string detail,
         ZonePoolOfflinePatchWriteResult? create = null,
         string directory = "",
-        ZonePoolOfflinePatchWriteResult? restore = null)
+        ZonePoolOfflinePatchWriteResult? restore = null,
+        ZonePoolPatchedCopyVerificationResult? verification = null)
         => new()
         {
             Success = false,
             CreateResult = create,
             RestoreResult = restore,
+            VerificationResult = verification,
             TemporaryDirectory = directory,
             Detail = detail
         };
@@ -128,6 +124,7 @@ public sealed class ZonePoolOfflineWriterSelfTestResult
 {
     public bool Success { get; init; }
     public ZonePoolOfflinePatchWriteResult? CreateResult { get; init; }
+    public ZonePoolPatchedCopyVerificationResult? VerificationResult { get; init; }
     public ZonePoolOfflinePatchWriteResult? RestoreResult { get; init; }
     public string BaselineSha256 { get; init; } = string.Empty;
     public string PatchedSha256 { get; init; } = string.Empty;
