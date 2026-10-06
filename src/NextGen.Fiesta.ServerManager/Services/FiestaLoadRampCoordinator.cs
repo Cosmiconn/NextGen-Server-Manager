@@ -36,6 +36,13 @@ public sealed class FiestaLoadRampCoordinator
             return FiestaLoadRampResult.CreateBlocked(
                 $"Credential-Manifest enthält nur {credentials.Clients.Count:N0} eindeutige Clients; benötigt werden {finalTarget:N0}.");
 
+        if (credentials.Clients.Take(finalTarget).Any(x => x.CreateCharacterIfMissing)
+            && string.IsNullOrWhiteSpace(options.ClientOptions.CharacterCreateTemplatePath))
+        {
+            return FiestaLoadRampResult.CreateBlocked(
+                "Mindestens ein Testaccount benötigt Auto-Create, aber CharacterCreateTemplatePath fehlt.");
+        }
+
         var baseline = _runtimeObserver.Observe(options.TargetZoneExePath, minimumUptimeSeconds: 0);
         if (!baseline.Passed || baseline.Pools is null)
             return FiestaLoadRampResult.CreateBlocked(
@@ -365,6 +372,7 @@ public sealed class FiestaLoadRampCoordinator
             ClientTag = source.ClientTag,
             FileHash = source.FileHash,
             ZoneTransferTemplatePath = source.ZoneTransferTemplatePath,
+            CharacterCreateTemplatePath = source.CharacterCreateTemplatePath,
             AllowEmulatorSizedZoneTransfer = false,
             StepTimeout = source.StepTimeout,
             ZoneLoginTimeout = source.ZoneLoginTimeout,
