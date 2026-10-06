@@ -33,8 +33,8 @@ public partial class MainWindow
             new Action(() =>
             {
                 var workArea = SystemParameters.WorkArea;
-                window.MinWidth = Math.Min(1024, Math.Max(640, workArea.Width - 24));
-                window.MinHeight = Math.Min(680, Math.Max(520, workArea.Height - 24));
+                window.MinWidth = Math.Max(640, Math.Min(720, workArea.Width - 24));
+                window.MinHeight = Math.Max(520, Math.Min(620, workArea.Height - 24));
                 FitResponsiveWindowToWorkArea(window, workArea);
                 ApplyNarrowResponsiveLayout(window);
             }),
