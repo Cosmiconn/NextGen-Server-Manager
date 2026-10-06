@@ -45,6 +45,12 @@ public sealed class ZonePoolOfflineWriterSelfTest
                 return Failed("Patchkopie konnte nicht erzeugt werden: " + create.Detail, create, testDirectory);
             if (create.SafetyGate?.FullCoverageCertified != true)
                 return Failed("Writer meldete Erfolg ohne FullCoverageCertified.", create, testDirectory);
+            if (create.SafetyGate?.OfflineWriterCertified != true)
+                return Failed("Writer meldete Erfolg ohne OfflineWriterCertified.", create, testDirectory);
+            if (create.SafetyGate?.CanCreateOfflinePatchedCopy != true)
+                return Failed("Writer meldete Erfolg ohne CanCreateOfflinePatchedCopy.", create, testDirectory);
+            if (create.SafetyGate?.CanWriteBinary != false)
+                return Failed("Safety-Gate hat Live-/In-Place-Binärschreiben unerwartet freigegeben.", create, testDirectory);
             if (!File.Exists(output))
                 return Failed("Writer meldete Erfolg, aber die Patchkopie fehlt.", create, testDirectory);
 
@@ -75,7 +81,7 @@ public sealed class ZonePoolOfflineWriterSelfTest
                 PatchedSha256 = patchedHash,
                 RollbackSha256 = rolledBackHash,
                 TemporaryDirectory = testDirectory,
-                Detail = $"SELFTEST OK: FullCoverageCertified, Patch SHA {patchedHash}, Rollback SHA {rolledBackHash}, Original unverändert. Testartefakte werden entfernt."
+                Detail = $"SELFTEST OK: Offline-COPY zertifiziert, Live/In-Place weiterhin gesperrt, Patch SHA {patchedHash}, Rollback SHA {rolledBackHash}, Original unverändert. Testartefakte werden entfernt."
             };
         }
         catch (Exception ex)
