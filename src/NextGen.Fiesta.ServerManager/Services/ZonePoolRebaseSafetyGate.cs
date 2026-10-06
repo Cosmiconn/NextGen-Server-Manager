@@ -1,8 +1,9 @@
 namespace NextGen.Fiesta.ServerManager.Services;
 
 /// <summary>
-/// Aggregates every current read-only proof required before a Player/Mob/NPC binary
-/// rebase can ever be considered. It deliberately cannot write anything.
+/// Aggregates every read-only proof required to certify the analyzed Player/Mob/NPC
+/// rebase surface. Coverage certification and permission to mutate Zone.exe are kept
+/// deliberately separate: this gate never writes anything.
 /// </summary>
 public sealed class ZonePoolRebaseSafetyGate
 {
@@ -12,6 +13,9 @@ public sealed class ZonePoolRebaseSafetyGate
     private readonly ZonePoolFalsePositiveAudit _falsePositives = new();
     private readonly ZoneAllocatorCallInventoryAudit _allocatorInventory = new();
     private readonly ZoneAllocatorDynamicPathAudit _dynamicAllocatorPaths = new();
+    private readonly ZonePoolConstantCoverageAudit _constantCoverage = new();
+    private readonly ZoneNpcPoolCoverageAudit _npcCoverage = new();
+    private readonly ZonePoolPatchManifest _patchManifest = new();
 
     public ZonePoolRebaseSafetyGateResult Evaluate(
         string zoneExePath,
@@ -35,6 +39,9 @@ public sealed class ZonePoolRebaseSafetyGate
         var falsePositives = _falsePositives.Analyze(zoneExePath);
         var inventory = _allocatorInventory.Analyze(zoneExePath);
         var dynamicPaths = _dynamicAllocatorPaths.Analyze(zoneExePath);
+        var constantCoverage = _constantCoverage.Analyze(zoneExePath);
+        var npcCoverage = _npcCoverage.Analyze(zoneExePath, npcCapacity);
+        var manifest = _patchManifest.Build(zoneExePath, playerCapacity, mobCapacity, npcCapacity);
 
         var baselineProofsOk = core.HashMatches
                                && core.LayoutValid
@@ -52,16 +59,27 @@ public sealed class ZonePoolRebaseSafetyGate
                                && dynamicPaths.EvidenceVerified
                                && dynamicPaths.NoStaticAbsoluteAllocatorPointers;
 
-        // The allocator-call graph is now closed for all direct calls and contains no
-        // statically stored absolute allocator pointer. Full patch coverage is still kept
-        // false until the complete set of mutable rebase bytes (core + auxiliary sites)
-        // is promoted into one transactional offline patch manifest with rollback proof.
-        const bool fullCoverageCertified = false;
-        var canWrite = baselineProofsOk && fullCoverageCertified;
+        var fullCoverageCertified = baselineProofsOk
+                                    && constantCoverage.HashMatches
+                                    && constantCoverage.InventoryVerified
+                                    && npcCoverage.CoverageVerified
+                                    && manifest.ManifestVerified
+                                    && manifest.NoOverlaps
+                                    && manifest.RollbackVerified;
 
-        var status = baselineProofsOk
-            ? "Alle aktuellen Hash-/Byte-/Control-Flow-/Allocator-Beweise sind grün. Direkte Allocator-Pfade sind vollständig inventarisiert und die dynamischen ShineMob-Pfade klassifiziert. Schreiben bleibt gesperrt, bis Core- und Zusatzabhängigkeiten in einem vollständigen transaktionalen Offline-Patchmanifest mit Rollback-Nachweis zusammengeführt sind."
-            : "Mindestens ein hash-/bytegebundener Sicherheitsbeweis ist fehlgeschlagen. Kein Binärschreibpfad zulässig.";
+        // Coverage certification means that the analyzed binary surface and the exact
+        // offline byte manifest are internally complete for the verified NA2016 build.
+        // It does NOT authorize mutation. A separate atomic offline writer must still
+        // prove backup creation, target-hash verification, stop-state enforcement and
+        // rollback before this can ever become true.
+        const bool offlineWriterCertified = false;
+        var canWrite = fullCoverageCertified && offlineWriterCertified;
+
+        var status = !baselineProofsOk
+            ? "Mindestens ein hash-/bytegebundener Basisbeweis ist fehlgeschlagen. Kein Binärschreibpfad zulässig."
+            : fullCoverageCertified
+                ? "Player/Mob/NPC-Rebase-Coverage ist für den verifizierten NA2016-Zone-Build vollständig zertifiziert: Konstanten-Inventur, NPC-Strukturpfade und 83-Site-Offline-Manifest inklusive bytegenauem Rollback sind grün. Binärschreiben bleibt gesperrt, bis der atomare Offline-Writer separat zertifiziert ist."
+                : "Basisbeweise sind grün, aber die vollständige Rebase-Coverage ist noch nicht zertifiziert. Kein Binärschreibpfad zulässig.";
 
         return new ZonePoolRebaseSafetyGateResult
         {
@@ -72,8 +90,12 @@ public sealed class ZonePoolRebaseSafetyGate
             FalsePositives = falsePositives,
             AllocatorInventory = inventory,
             DynamicAllocatorPaths = dynamicPaths,
+            ConstantCoverage = constantCoverage,
+            NpcCoverage = npcCoverage,
+            PatchManifest = manifest,
             BaselineProofsVerified = baselineProofsOk,
             FullCoverageCertified = fullCoverageCertified,
+            OfflineWriterCertified = offlineWriterCertified,
             CanWriteBinary = canWrite,
             Detail = status
         };
@@ -89,8 +111,12 @@ public sealed class ZonePoolRebaseSafetyGateResult
     public ZonePoolFalsePositiveAuditResult? FalsePositives { get; init; }
     public ZoneAllocatorCallInventoryAuditResult? AllocatorInventory { get; init; }
     public ZoneAllocatorDynamicPathAuditResult? DynamicAllocatorPaths { get; init; }
+    public ZonePoolConstantCoverageAuditResult? ConstantCoverage { get; init; }
+    public ZoneNpcPoolCoverageAuditResult? NpcCoverage { get; init; }
+    public ZonePoolPatchManifestResult? PatchManifest { get; init; }
     public bool BaselineProofsVerified { get; init; }
     public bool FullCoverageCertified { get; init; }
+    public bool OfflineWriterCertified { get; init; }
     public bool CanWriteBinary { get; init; }
     public string Detail { get; init; } = string.Empty;
 }
