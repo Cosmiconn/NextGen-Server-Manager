@@ -107,7 +107,7 @@ jobs:
           $process = Start-Process -FilePath $exe -PassThru
 
           try {
-            $deadline = (Get-Date).AddSeconds(35)
+            $deadline = (Get-Date).AddSeconds(40)
             $shown = $false
             $resized = $false
             $navigated = $false
@@ -121,12 +121,8 @@ jobs:
                   Write-Host $startupText
                   throw 'WPF startup/resize/navigation log contains a fatal exception.'
                 }
-                if ($startupText -match 'MainWindow successfully shown\.') {
-                  $shown = $true
-                }
-                if ($startupText -match 'UI_SMOKE_NAV completed\.') {
-                  $navigated = $true
-                }
+                if ($startupText -match 'MainWindow successfully shown\.') { $shown = $true }
+                if ($startupText -match 'UI_SMOKE_NAV completed\.') { $navigated = $true }
                 if ($startupText -match 'UI_SMOKE_RESIZE completed\.') {
                   $resized = $true
                   break
@@ -143,17 +139,17 @@ jobs:
 
             $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
             Write-Host $startupText
-            if (-not $shown) { throw 'MainWindow did not report successful Show() within 35 seconds.' }
-            if (-not $navigated) { throw 'Navigation smoke did not complete within 35 seconds.' }
-            if (-not $resized) { throw 'Responsive resize smoke did not complete within 35 seconds.' }
+            if (-not $shown) { throw 'MainWindow did not report successful Show() within 40 seconds.' }
+            if (-not $navigated) { throw 'Navigation smoke did not complete within 40 seconds.' }
+            if (-not $resized) { throw 'Responsive resize smoke did not complete within 40 seconds.' }
             if ($startupText -match 'FATAL ') { throw 'WPF runtime smoke log contains a fatal exception.' }
             if ($startupText -notmatch 'target=720x620 actual=720x620') {
               throw 'Responsive smoke did not actually reach the 720x620 breakpoint.'
             }
 
             $screenshots = @(Get-ChildItem -LiteralPath $uiSmokeDir -Filter '*.png' -File)
-            if ($screenshots.Count -lt 13) {
-              throw "Expected at least thirteen rendered UI screenshots, found $($screenshots.Count)."
+            if ($screenshots.Count -lt 16) {
+              throw "Expected at least sixteen rendered UI screenshots, found $($screenshots.Count)."
             }
             if (-not ($screenshots.Name -match 'ui-target-720x620-actual-720x620\.png')) {
               throw 'Missing exact 720x620 rendered UI screenshot.'
@@ -168,11 +164,14 @@ jobs:
               'ui-nav-diagnostic-logs-',
               'ui-nav-diagnostic-timeline-',
               'ui-nav-diagnostic-pdb-',
-              'ui-nav-tools-client-map-safety-'
+              'ui-nav-tools-client-map-safety-',
+              'ui-utility-settings-',
+              'ui-utility-manual-',
+              'ui-utility-credits-'
             )
             foreach ($viewPrefix in $requiredViews) {
               if (-not ($screenshots.Name | Where-Object { $_ -like "$viewPrefix*" })) {
-                throw "Missing rendered navigation screenshot: $viewPrefix"
+                throw "Missing rendered UI screenshot: $viewPrefix"
               }
             }
             Write-Host "Rendered UI screenshots: $($screenshots.Name -join ', ')"
