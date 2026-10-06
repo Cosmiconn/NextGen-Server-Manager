@@ -8,6 +8,7 @@ public sealed class ZoneCapacityMonitor
     private const int MapBlockLimit = 256;
     private const int MapClusterLimit = 512;
     private readonly Dictionary<int, Queue<(DateTime Time, double Score)>> _history = new();
+    private readonly WorldManagerCapacityProbe _worldManagerProbe = new();
 
     public IReadOnlyList<ZoneCapacitySnapshot> Build(
         IReadOnlyList<FiestaServiceEntry> services,
@@ -68,9 +69,19 @@ public sealed class ZoneCapacityMonitor
     public WorldManagerCapacitySnapshot BuildWorldManager(IReadOnlyList<FiestaServiceEntry> services, AppSettings settings)
     {
         var wm = services.FirstOrDefault(x => x.Kind == FiestaServiceKind.WorldManager);
-        if (wm is null) return new WorldManagerCapacitySnapshot { Pressure = "NICHT GEFUNDEN", Recommendation = "WorldManager nicht erkannt." };
-        var clientPct = Percent(wm.EstablishedClientConnections, 1500);
-        var zonePct = Percent(wm.EstablishedInternalConnections, 100);
+        if (wm is null)
+            return new WorldManagerCapacitySnapshot
+            {
+                Pressure = "NICHT GEFUNDEN",
+                Recommendation = "WorldManager nicht erkannt."
+            };
+
+        var probe = _worldManagerProbe.Read(settings.ServerRoot, wm);
+        var clientSessions = probe.RuntimeVerified ? probe.RuntimeNumSessions : wm.EstablishedClientConnections;
+        var clientLimit = Math.Max(1, probe.ActiveClientLimit);
+        var zoneLimit = Math.Max(1, probe.ConfiguredZoneSessionLimit);
+        var clientPct = Percent(clientSessions, clientLimit);
+        var zonePct = Percent(wm.EstablishedInternalConnections, zoneLimit);
         var memoryPct = settings.ZonePrivateMemoryBudgetMb > 0 ? wm.PrivateMemoryMb / settings.ZonePrivateMemoryBudgetMb * 100.0 : 0;
         var cpuPct = Math.Clamp(wm.CpuCorePercent, 0, 100);
         var max = new[] { clientPct, zonePct, memoryPct, cpuPct }.Max();
@@ -78,16 +89,44 @@ public sealed class ZoneCapacityMonitor
             : max >= settings.ZoneCriticalPercent ? "KRITISCH"
             : max >= settings.ZoneScaleRecommendPercent ? "AUSBAU"
             : max >= settings.ZoneWarningPercent ? "WARNUNG" : "OK";
-        var recommendation = zonePct >= settings.ZoneWarningPercent
-            ? "WM-Zone-Sessionlistener nähert sich dem verifizierten nMaxAccept=100; offene/duplizierte S2S-Verbindungen prüfen."
-            : clientPct >= settings.ZoneWarningPercent
-                ? "WM-Clientlistener nähert sich nMaxAccept=1500; Login-/World-Verteilung prüfen."
-                : pressure is "KRITISCH" or "AUSBAU" ? "WM CPU/RAM-Kapazität prüfen; eine zusätzliche Zone entlastet nicht automatisch den WorldManager."
-                : "WorldManager besitzt nach aktuell messbaren Werten Reserve.";
+
+        string recommendation;
+        if (probe.RestartPending)
+        {
+            recommendation = $"WorldManager-Konfiguration und aktiver Hard-Pool unterscheiden sich: aktiv {probe.RuntimeMaxSessions:N0}, ServerInfo {probe.ConfiguredClientLimit:N0}. WorldManager kontrolliert neu starten, bevor die höhere Kapazität als aktiv bewertet wird.";
+        }
+        else if (zonePct >= settings.ZoneWarningPercent)
+        {
+            recommendation = $"WM-Zone-Sessionlistener nähert sich dem aktuell konfigurierten Limit {zoneLimit:N0}; offene/duplizierte S2S-Verbindungen prüfen.";
+        }
+        else if (clientPct >= settings.ZoneWarningPercent)
+        {
+            recommendation = $"WM-Clientpool nähert sich dem aktiv gemessenen Limit {clientLimit:N0}; Login-/World-Verteilung prüfen.";
+        }
+        else if (pressure is "KRITISCH" or "AUSBAU")
+        {
+            recommendation = "WM CPU/RAM-Kapazität prüfen; eine zusätzliche Zone entlastet nicht automatisch den WorldManager.";
+        }
+        else
+        {
+            recommendation = probe.RuntimeVerified
+                ? "WorldManager besitzt nach hash-verifizierten Runtimewerten Reserve."
+                : $"WorldManager besitzt nach aktuell messbaren Werten Reserve. Limitquelle: {probe.Source}.";
+        }
+
         return new WorldManagerCapacitySnapshot
         {
-            ClientSessions = wm.EstablishedClientConnections,
+            ClientSessions = clientSessions,
+            ClientLimit = clientLimit,
+            ClientHardLimit = probe.RuntimeVerified ? probe.RuntimeMaxSessions : clientLimit,
+            ConfiguredClientLimit = probe.ConfiguredClientLimit,
+            RuntimeUserLimit = probe.RuntimeVerified ? probe.RuntimeUserLimit : clientLimit,
+            RuntimeVerified = probe.RuntimeVerified,
+            RestartPending = probe.RestartPending,
+            LimitSource = probe.Source,
+            LimitDetail = probe.Detail,
             ZoneSessions = wm.EstablishedInternalConnections,
+            ZoneSessionLimit = zoneLimit,
             CpuCorePercent = wm.CpuCorePercent,
             PrivateMemoryMb = wm.PrivateMemoryMb,
             Pressure = pressure,
