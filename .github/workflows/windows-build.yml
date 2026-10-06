@@ -85,7 +85,7 @@ jobs:
         shell: pwsh
         run: dotnet publish "$env:SOURCE_ROOT\src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj" -c Release -r win-x64 --self-contained false --no-restore -o "$env:GITHUB_WORKSPACE\artifacts\win-x64"
 
-      - name: WPF startup and resize smoke
+      - name: WPF startup resize and navigation smoke
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -102,16 +102,15 @@ jobs:
           }
           New-Item -ItemType Directory -Path $uiSmokeDir | Out-Null
 
-          # Production startup ignores these unless explicitly set. In CI they ask the
-          # real WPF dispatcher to traverse breakpoints and render the settled frames.
           $env:NEXTGEN_UI_SMOKE_RESIZE = '1'
           $env:NEXTGEN_UI_SMOKE_SCREENSHOT_DIR = $uiSmokeDir
           $process = Start-Process -FilePath $exe -PassThru
 
           try {
-            $deadline = (Get-Date).AddSeconds(25)
+            $deadline = (Get-Date).AddSeconds(35)
             $shown = $false
             $resized = $false
+            $navigated = $false
             while ((Get-Date) -lt $deadline) {
               Start-Sleep -Milliseconds 500
               $process.Refresh()
@@ -120,10 +119,13 @@ jobs:
                 $startupText = Get-Content -LiteralPath $startupLog -Raw -ErrorAction SilentlyContinue
                 if ($startupText -match 'FATAL ') {
                   Write-Host $startupText
-                  throw 'WPF startup/resize log contains a fatal exception.'
+                  throw 'WPF startup/resize/navigation log contains a fatal exception.'
                 }
                 if ($startupText -match 'MainWindow successfully shown\.') {
                   $shown = $true
+                }
+                if ($startupText -match 'UI_SMOKE_NAV completed\.') {
+                  $navigated = $true
                 }
                 if ($startupText -match 'UI_SMOKE_RESIZE completed\.') {
                   $resized = $true
@@ -135,37 +137,49 @@ jobs:
                 $exitCode = $process.ExitCode
                 $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
                 Write-Host $startupText
-                throw "WPF process exited during startup/resize smoke test with code $exitCode."
+                throw "WPF process exited during startup/resize/navigation smoke test with code $exitCode."
               }
             }
 
             $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
             Write-Host $startupText
-            if (-not $shown) {
-              throw 'MainWindow did not report successful Show() within 25 seconds.'
-            }
-            if (-not $resized) {
-              throw 'Responsive resize smoke did not complete within 25 seconds.'
-            }
-            if ($startupText -match 'FATAL ') {
-              throw 'WPF runtime smoke log contains a fatal exception.'
-            }
+            if (-not $shown) { throw 'MainWindow did not report successful Show() within 35 seconds.' }
+            if (-not $navigated) { throw 'Navigation smoke did not complete within 35 seconds.' }
+            if (-not $resized) { throw 'Responsive resize smoke did not complete within 35 seconds.' }
+            if ($startupText -match 'FATAL ') { throw 'WPF runtime smoke log contains a fatal exception.' }
             if ($startupText -notmatch 'target=720x620 actual=720x620') {
               throw 'Responsive smoke did not actually reach the 720x620 breakpoint.'
             }
 
             $screenshots = @(Get-ChildItem -LiteralPath $uiSmokeDir -Filter '*.png' -File)
-            if ($screenshots.Count -lt 4) {
-              throw "Expected at least four rendered UI screenshots, found $($screenshots.Count)."
+            if ($screenshots.Count -lt 13) {
+              throw "Expected at least thirteen rendered UI screenshots, found $($screenshots.Count)."
             }
             if (-not ($screenshots.Name -match 'ui-target-720x620-actual-720x620\.png')) {
               throw 'Missing exact 720x620 rendered UI screenshot.'
+            }
+
+            $requiredViews = @(
+              'ui-nav-dashboard-',
+              'ui-nav-server-zone-capacity-',
+              'ui-nav-server-limits-',
+              'ui-nav-server-adaptive-hooks-',
+              'ui-nav-server-performance-overflow-',
+              'ui-nav-diagnostic-logs-',
+              'ui-nav-diagnostic-timeline-',
+              'ui-nav-diagnostic-pdb-',
+              'ui-nav-tools-client-map-safety-'
+            )
+            foreach ($viewPrefix in $requiredViews) {
+              if (-not ($screenshots.Name | Where-Object { $_ -like "$viewPrefix*" })) {
+                throw "Missing rendered navigation screenshot: $viewPrefix"
+              }
             }
             Write-Host "Rendered UI screenshots: $($screenshots.Name -join ', ')"
 
             $process.Refresh()
             if ($process.HasExited) {
-              throw "WPF process exited unexpectedly after resize smoke with code $($process.ExitCode)."
+              throw "WPF process exited unexpectedly after UI smoke with code $($process.ExitCode)."
             }
           }
           finally {
