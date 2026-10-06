@@ -85,7 +85,7 @@ jobs:
         shell: pwsh
         run: dotnet publish "$env:SOURCE_ROOT\src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj" -c Release -r win-x64 --self-contained false --no-restore -o "$env:GITHUB_WORKSPACE\artifacts\win-x64"
 
-      - name: WPF startup smoke
+      - name: WPF startup and resize smoke
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -96,11 +96,16 @@ jobs:
 
           $startupLog = Join-Path $env:LOCALAPPDATA 'NextGenFiestaServerManager\startup.log'
           Remove-Item -LiteralPath $startupLog -Force -ErrorAction SilentlyContinue
+
+          # Production startup ignores this unless explicitly set. In CI it asks the
+          # real WPF dispatcher to traverse the responsive breakpoints before success.
+          $env:NEXTGEN_UI_SMOKE_RESIZE = '1'
           $process = Start-Process -FilePath $exe -PassThru
 
           try {
-            $deadline = (Get-Date).AddSeconds(12)
+            $deadline = (Get-Date).AddSeconds(20)
             $shown = $false
+            $resized = $false
             while ((Get-Date) -lt $deadline) {
               Start-Sleep -Milliseconds 500
               $process.Refresh()
@@ -109,10 +114,13 @@ jobs:
                 $startupText = Get-Content -LiteralPath $startupLog -Raw -ErrorAction SilentlyContinue
                 if ($startupText -match 'FATAL ') {
                   Write-Host $startupText
-                  throw 'WPF startup log contains a fatal exception.'
+                  throw 'WPF startup/resize log contains a fatal exception.'
                 }
                 if ($startupText -match 'MainWindow successfully shown\.') {
                   $shown = $true
+                }
+                if ($startupText -match 'UI_SMOKE_RESIZE completed\.') {
+                  $resized = $true
                   break
                 }
               }
@@ -121,30 +129,32 @@ jobs:
                 $exitCode = $process.ExitCode
                 $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
                 Write-Host $startupText
-                throw "WPF process exited during startup smoke test with code $exitCode."
+                throw "WPF process exited during startup/resize smoke test with code $exitCode."
               }
             }
 
-            if (-not $shown) {
-              $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
-              Write-Host $startupText
-              throw 'MainWindow did not report successful Show() within 12 seconds.'
-            }
-
-            # Keep the dispatcher alive a little longer so Loaded/SizeChanged handlers,
-            # runtime styles and responsive shell construction can fail the test too.
-            Start-Sleep -Seconds 4
-            $process.Refresh()
             $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
             Write-Host $startupText
-            if ($startupText -match 'FATAL ') {
-              throw 'WPF runtime smoke log contains a fatal exception after Show().'
+            if (-not $shown) {
+              throw 'MainWindow did not report successful Show() within 20 seconds.'
             }
+            if (-not $resized) {
+              throw 'Responsive resize smoke did not complete within 20 seconds.'
+            }
+            if ($startupText -match 'FATAL ') {
+              throw 'WPF runtime smoke log contains a fatal exception.'
+            }
+            if ($startupText -notmatch 'target=720x620') {
+              throw 'Responsive smoke did not reach the narrow 720x620 breakpoint.'
+            }
+
+            $process.Refresh()
             if ($process.HasExited) {
-              throw "WPF process exited unexpectedly after Show() with code $($process.ExitCode)."
+              throw "WPF process exited unexpectedly after resize smoke with code $($process.ExitCode)."
             }
           }
           finally {
+            Remove-Item Env:NEXTGEN_UI_SMOKE_RESIZE -ErrorAction SilentlyContinue
             $process.Refresh()
             if (-not $process.HasExited) {
               Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
