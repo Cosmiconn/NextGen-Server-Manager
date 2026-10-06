@@ -52,9 +52,6 @@ public partial class MainWindow
         ApplyNarrowHeaderDensity(window, width);
         ApplyNarrowPrimaryHeaderDensity(main, width);
 
-        // Above 960 DIP, MainWindow's reference-width calculation stays authoritative.
-        // This narrow override exists only to remove the old 220-DIP floor when the
-        // user deliberately resizes further down.
         if (width < 960)
         {
             var available = Math.Max(560, width - 32);
@@ -151,12 +148,12 @@ public partial class MainWindow
                 .FirstOrDefault(text => text.FontSize <= 11 && text != title);
             var headerGrid = header as Grid ?? ResponsiveDescendants<Grid>(header).FirstOrDefault();
 
-            if (width < 860)
+            if (width < 960)
             {
                 if (headerGrid is not null && headerGrid.ColumnDefinitions.Count >= 2)
                     headerGrid.ColumnDefinitions[0].Width = new GridLength(width < 740 ? 30 : 38);
                 if (title is not null)
-                    title.FontSize = width < 740 ? 12 : 14;
+                    title.FontSize = width < 740 ? 12 : width < 860 ? 14 : 15;
                 if (subtitle is not null)
                     subtitle.Visibility = Visibility.Collapsed;
             }
