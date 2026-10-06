@@ -17,6 +17,25 @@ Diese Bildreferenz hat Vorrang vor älteren textlichen Beschreibungen, Mockup-In
 
 Das Ziel ist eine möglichst pixelnahe Reproduktion der freigegebenen Ansicht bei weiterhin vollständig funktionaler Anwendung. Keine bestehende Funktion, Command-Bindung, Diagnose oder Serviceaktion darf durch den Umbau verloren gehen.
 
+## Skalierbares Fenster – verbindlich
+
+**1536×864 ist die visuelle Referenzgröße, keine feste Canvas- oder Mindestgröße.** Das normale Windows-Fenster bleibt frei skalierbar und muss seine Informationshierarchie beim Vergrößern und Verkleinern erhalten.
+
+Verbindliche Regeln:
+
+- Bei **1536×864** bleibt die freigegebene Referenzanordnung unverändert und dient dem Pixelvergleich.
+- Auf größeren Fenstern wachsen verfügbare Inhaltsflächen, Tabellen und Navigation sinnvoll mit; die UI wird nicht als Screenshot oder `Viewbox` künstlich hochskaliert.
+- Auf kleineren Fenstern darf kein zentraler Bedienpfad abgeschnitten oder unzugänglich werden.
+- Die Anwendung passt ihre anfängliche Größe an die verfügbare Windows-Arbeitsfläche an, falls 1536×864 auf dem aktuellen Bildschirm nicht vollständig hineinpasst.
+- Die Server-Root-Toolbar darf bei knapper Breite auf **Icon-Darstellung mit Tooltips** verdichten; die Funktionen `Ordner`, `Scannen`, `Status aktualisieren`, `Einstellungen`, `Handbuch` und `Credits` bleiben dabei erreichbar.
+- Die sechs Live-Capacity-Summary-Cards stehen in der Referenzgröße in **einer Reihe**; bei schmaleren Fenstern dürfen sie in mehrere Reihen umbrechen, ohne Inhalte zu verlieren.
+- Der Provisionierungsplan verwendet bei geringerer Breite proportionale Spalten statt starrer Pixelbreiten.
+- Breite Tabellen dürfen horizontal scrollen; Spalten oder Messwerte werden nicht nur deshalb entfernt, weil das Fenster kleiner ist.
+- Haupt- und Subnavigation bleiben erreichbar. Overflow/Chevron ist für zusätzliche Module ausdrücklich vorgesehen.
+- WPF-/Windows-DPI-Skalierung bleibt unabhängig von den Layout-Breakpoints aktiv; Schrift und Controls werden nicht per Bitmap-Skalierung verfälscht.
+
+Die aktuelle responsive Implementierung ist in `MainWindow.Responsive.cs` isoliert, damit die 1536×864-Zielgeometrie und die Anpassungen für kleinere Arbeitsflächen getrennt nachvollziehbar bleiben.
+
 ## Verbindlicher sichtbarer Shell-Aufbau
 
 Von oben nach unten:
@@ -133,5 +152,6 @@ Vor Merge nach `main` sind zwingend erforderlich:
 4. Direkter visueller Vergleich mit der freigegebenen 1536×864-Referenz.
 5. Abweichungen bei Anordnung, Größenhierarchie, Farben, Navigation, Cards, Tabellen, Toolbar und Utilities werden vor Merge korrigiert.
 6. Alle bestehenden Commands, Bindings, Services und Diagnosepfade bleiben erreichbar und testbar.
+7. Zusätzlich mindestens ein Resize-Smoke-Test unterhalb der Referenzbreite: keine abgeschnittenen Hauptaktionen, Capacity-Cards brechen kontrolliert um, Provisionierungsfelder bleiben bedienbar und Tabellen sind scrollbar.
 
 Die UI-Arbeit erfolgt auf `ui/navigation-redesign`. `main` bleibt bis zur realen Windows-Abnahme die letzte abgenommene Baseline.
