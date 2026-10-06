@@ -404,19 +404,54 @@ public partial class MainWindow
         var output = Path.Combine(GetZonePoolWorkDirectory(), $"{zoneName}-zone-transfer-template.json");
         var zonePort = ResolveSelectedZoneClientPort(target);
 
-        var result = await Task.Run(() => new FiestaZoneTransferCaptureImporter().Import(
-            new FiestaZoneTransferCaptureOptions
-            {
-                CapturePath = capture,
-                OutputTemplatePath = output,
-                ZonePort = zonePort,
-                ExpectedCharacterName = character
-            }));
+        var loginPort = ParseZoneLoadInt(_zoneLoadLoginPortBox, "Login-Port", 1, 65535);
+        var profileOutput = Path.Combine(GetZonePoolWorkDirectory(), $"{zoneName}-client-capture-profile.json");
 
-        if (!result.Success) throw new InvalidOperationException(result.Detail);
-        if (_zoneLoadTemplatePathBox is not null) _zoneLoadTemplatePathBox.Text = result.TemplatePath;
-        SetZoneLoadStatus(result.Detail);
-        return result.Detail;
+        var imported = await Task.Run(() =>
+        {
+            var zoneResult = new FiestaZoneTransferCaptureImporter().Import(
+                new FiestaZoneTransferCaptureOptions
+                {
+                    CapturePath = capture,
+                    OutputTemplatePath = output,
+                    ZonePort = zonePort,
+                    ExpectedCharacterName = character
+                });
+            if (!zoneResult.Success)
+                return (Zone: zoneResult, Client: (FiestaClientCaptureProfileResult?)null);
+
+            var clientResult = new FiestaClientCaptureProfileImporter().Import(
+                new FiestaClientCaptureProfileOptions
+                {
+                    CapturePath = capture,
+                    OutputProfilePath = profileOutput,
+                    LoginPort = loginPort
+                });
+            return (Zone: zoneResult, Client: clientResult);
+        });
+
+        if (!imported.Zone.Success)
+            throw new InvalidOperationException(imported.Zone.Detail);
+        if (imported.Client is null || !imported.Client.Success || imported.Client.Profile is null)
+        {
+            throw new InvalidOperationException(
+                imported.Zone.Detail + Environment.NewLine +
+                (imported.Client?.Detail ?? "CLIENT CAPTURE PROFILE: BLOCKED · Profilimport wurde nicht ausgeführt."));
+        }
+
+        var profile = imported.Client.Profile;
+        if (_zoneLoadTemplatePathBox is not null) _zoneLoadTemplatePathBox.Text = imported.Zone.TemplatePath;
+        if (_zoneLoadLoginHostBox is not null) _zoneLoadLoginHostBox.Text = profile.LoginHost;
+        if (_zoneLoadLoginPortBox is not null) _zoneLoadLoginPortBox.Text = profile.LoginPort.ToString();
+        if (_zoneLoadWorldIdBox is not null) _zoneLoadWorldIdBox.Text = profile.WorldId.ToString();
+        if (_zoneLoadClientYearBox is not null) _zoneLoadClientYearBox.Text = profile.ClientYear.ToString();
+        if (_zoneLoadClientVersionBox is not null) _zoneLoadClientVersionBox.Text = profile.ClientVersion.ToString();
+        if (_zoneLoadFileHashBox is not null) _zoneLoadFileHashBox.Text = profile.FileHash ?? string.Empty;
+
+        var detail = imported.Zone.Detail + " · " + imported.Client.Detail +
+                     $" · PCAP {ShortHash(profile.SourceCaptureSha256)}";
+        SetZoneLoadStatus(detail);
+        return detail;
     }
 
     private async Task RunPlayerLoadRampUiAsync(bool singleClientOnly)
