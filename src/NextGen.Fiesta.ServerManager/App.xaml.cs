@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using NextGen.Fiesta.ServerManager.Services;
 
 namespace NextGen.Fiesta.ServerManager;
 
@@ -58,6 +59,11 @@ public partial class App : System.Windows.Application
     {
         try
         {
+            var protocolSelfTest = FiestaHeadlessLoadClient.RunProtocolSelfTest();
+            if (!protocolSelfTest.Success)
+                throw new InvalidOperationException(protocolSelfTest.Detail);
+            Log("HEADLESS_PROTOCOL_SELFTEST PASS · " + protocolSelfTest.Detail);
+
             var originalWidth = window.Width;
             var originalHeight = window.Height;
             var targets = new (double Width, double Height)[]
