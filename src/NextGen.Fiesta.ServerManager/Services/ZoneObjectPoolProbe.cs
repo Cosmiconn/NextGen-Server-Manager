@@ -7,13 +7,18 @@ namespace NextGen.Fiesta.ServerManager.Services;
 
 /// <summary>
 /// Hash-bound, read-only probe for ShinePlayer/ShineMob/ShineNPC pool occupancy.
-/// No process memory is ever written by this service.
+/// Exactly two NA2016 Zone images are accepted: the verified stock build and the
+/// independently certified 2000/12000/512 offline-patch image. No process memory is written.
 /// </summary>
 public sealed class ZoneObjectPoolProbe
 {
     private const int StockPlayerLimit = 1500;
     private const int StockMobLimit = 8000;
     private const int StockNpcLimit = 256;
+
+    private const int CertifiedPlayerLimit = ZonePoolOfflineWriterSelfTest.PlayerTarget;
+    private const int CertifiedMobLimit = ZonePoolOfflineWriterSelfTest.MobTarget;
+    private const int CertifiedNpcLimit = ZonePoolOfflineWriterSelfTest.NpcTarget;
 
     // PDB/public symbol ?shineobjmanager@@3VShineObjectManager@@A
     // preferred VA 0x132826B8, image base 0x00400000.
@@ -43,30 +48,45 @@ public sealed class ZoneObjectPoolProbe
         if (zone.State != ServiceRuntimeState.Running || !zone.ProcessId.HasValue || zone.ProcessId.Value <= 0)
             return Unverified("Zone läuft nicht / PID nicht verfügbar");
 
-        if (!File.Exists(zone.ExecutablePath) || !HashEquals(zone.ExecutablePath, AdaptiveHookService.BaselineZoneSha256))
-            return Unverified("Zone.exe entspricht nicht dem verifizierten NA2016-Baseline-Hash");
+        if (!File.Exists(zone.ExecutablePath))
+            return Unverified("Zone.exe wurde am erwarteten Pfad nicht gefunden");
+
+        var binaryHash = TrySha256(zone.ExecutablePath);
+        var profile = ResolveProfile(binaryHash);
+        if (profile is null)
+            return Unverified(
+                "Zone.exe entspricht weder dem verifizierten NA2016-Stock-Hash noch dem zertifizierten 2000/12000/512-Patch-Hash",
+                binaryHash: binaryHash);
 
         try
         {
             using var process = Process.GetProcessById(zone.ProcessId.Value);
-            var moduleBase = process.MainModule?.BaseAddress ?? IntPtr.Zero;
+            var mainModule = process.MainModule;
+            var moduleBase = mainModule?.BaseAddress ?? IntPtr.Zero;
             if (moduleBase == IntPtr.Zero)
-                return Unverified("Zone-Modulbasis nicht lesbar");
+                return Unverified("Zone-Modulbasis nicht lesbar", profile, binaryHash);
+
+            var runningImagePath = mainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(runningImagePath) || !PathEquals(runningImagePath, zone.ExecutablePath))
+                return Unverified(
+                    $"Laufender Zone-Prozess stammt nicht aus dem erwarteten Pfad: {runningImagePath ?? "<unbekannt>"}",
+                    profile,
+                    binaryHash);
 
             var manager = IntPtr.Add(moduleBase, checked((int)ShineObjectManagerRva));
             var handle = OpenProcess(ProcessVmRead | ProcessQueryInformation, false, zone.ProcessId.Value);
             if (handle == IntPtr.Zero)
-                return Unverified("OpenProcess für Zone-Pool-Probe fehlgeschlagen");
+                return Unverified("OpenProcess für Zone-Pool-Probe fehlgeschlagen", profile, binaryHash);
 
             try
             {
                 if (!TryReadUInt32(handle, manager, PlayerArrayOffset, out var playerArray)
                     || !TryReadUInt32(handle, manager, NpcArrayOffset, out var npcArray)
                     || !TryReadUInt32(handle, manager, MobArrayOffset, out var mobArray))
-                    return Unverified("Zone-Pool-Arrayzeiger konnten nicht gelesen werden");
+                    return Unverified("Zone-Pool-Arrayzeiger konnten nicht gelesen werden", profile, binaryHash);
 
                 if (playerArray == 0 || npcArray == 0 || mobArray == 0)
-                    return Unverified("ShineObjectManager ist noch nicht vollständig initialisiert");
+                    return Unverified("ShineObjectManager ist noch nicht vollständig initialisiert", profile, binaryHash);
 
                 if (!TryReadUInt16(handle, manager, PlayerMaxOffset, out var playerMax)
                     || !TryReadUInt16(handle, manager, PlayerCountOffset, out var playerCount)
@@ -74,15 +94,21 @@ public sealed class ZoneObjectPoolProbe
                     || !TryReadUInt16(handle, manager, NpcCountOffset, out var npcCount)
                     || !TryReadUInt16(handle, manager, MobMaxOffset, out var mobMax)
                     || !TryReadUInt16(handle, manager, MobCountOffset, out var mobCount))
-                    return Unverified("Zone-Poolzähler konnten nicht gelesen werden");
+                    return Unverified("Zone-Poolzähler konnten nicht gelesen werden", profile, binaryHash);
 
-                // These exact maxima are part of the structural proof for this baseline.
-                // Refuse to label data verified if the layout does not match expectation.
-                if (playerMax != StockPlayerLimit || mobMax != StockMobLimit || npcMax != StockNpcLimit)
-                    return Unverified($"Poollayout unerwartet: Player {playerMax}, Mob {mobMax}, NPC {npcMax}");
+                // The maxima must agree with the exact hash-bound profile. This is the runtime
+                // proof that the expected ShineObjectEachList cardinalities were initialized.
+                if (playerMax != profile.PlayerLimit || mobMax != profile.MobLimit || npcMax != profile.NpcLimit)
+                {
+                    return Unverified(
+                        $"Hashprofil {profile.Name}, aber Runtime-Maxima unerwartet: " +
+                        $"Player {playerMax}/{profile.PlayerLimit}, Mob {mobMax}/{profile.MobLimit}, NPC {npcMax}/{profile.NpcLimit}",
+                        profile,
+                        binaryHash);
+                }
 
                 if (playerCount > playerMax || mobCount > mobMax || npcCount > npcMax)
-                    return Unverified("Poolbelegung überschreitet l_MaxSize; Layoutprüfung fehlgeschlagen");
+                    return Unverified("Poolbelegung überschreitet l_MaxSize; Layoutprüfung fehlgeschlagen", profile, binaryHash);
 
                 return new ZoneObjectPoolRuntimeSnapshot
                 {
@@ -93,7 +119,9 @@ public sealed class ZoneObjectPoolProbe
                     MobLimit = mobMax,
                     NpcCount = npcCount,
                     NpcLimit = npcMax,
-                    Detail = "Hash-verifizierte ShineObjectManager l_ListNum Runtimezähler."
+                    BinaryProfile = profile.Name,
+                    BinarySha256 = binaryHash,
+                    Detail = $"Hash-verifizierte ShineObjectManager l_ListNum/l_MaxSize Runtimezähler; Profil {profile.Name}."
                 };
             }
             finally
@@ -103,25 +131,58 @@ public sealed class ZoneObjectPoolProbe
         }
         catch (Exception ex)
         {
-            return Unverified(ex.Message);
+            return Unverified(ex.Message, profile, binaryHash);
         }
     }
 
-    private static ZoneObjectPoolRuntimeSnapshot Unverified(string detail) => new()
+    private static ZoneBinaryProfile? ResolveProfile(string hash)
     {
-        RuntimeVerified = false,
-        PlayerLimit = StockPlayerLimit,
-        MobLimit = StockMobLimit,
-        NpcLimit = StockNpcLimit,
-        Detail = detail
-    };
+        if (hash.Equals(AdaptiveHookService.BaselineZoneSha256, StringComparison.OrdinalIgnoreCase))
+            return new ZoneBinaryProfile("NA2016_STOCK", StockPlayerLimit, StockMobLimit, StockNpcLimit);
 
-    private static bool HashEquals(string path, string expected)
+        if (hash.Equals(ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256, StringComparison.OrdinalIgnoreCase))
+            return new ZoneBinaryProfile(
+                "NEXTGEN_CERTIFIED_2000_12000_512",
+                CertifiedPlayerLimit,
+                CertifiedMobLimit,
+                CertifiedNpcLimit);
+
+        return null;
+    }
+
+    private static ZoneObjectPoolRuntimeSnapshot Unverified(
+        string detail,
+        ZoneBinaryProfile? profile = null,
+        string binaryHash = "")
+        => new()
+        {
+            RuntimeVerified = false,
+            PlayerLimit = profile?.PlayerLimit ?? StockPlayerLimit,
+            MobLimit = profile?.MobLimit ?? StockMobLimit,
+            NpcLimit = profile?.NpcLimit ?? StockNpcLimit,
+            BinaryProfile = profile?.Name ?? "UNVERIFIED",
+            BinarySha256 = binaryHash,
+            Detail = detail
+        };
+
+    private static string TrySha256(string path)
     {
         try
         {
             using var fs = File.OpenRead(path);
-            return Convert.ToHexString(SHA256.HashData(fs)).Equals(expected, StringComparison.OrdinalIgnoreCase);
+            return Convert.ToHexString(SHA256.HashData(fs));
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool PathEquals(string left, string right)
+    {
+        try
+        {
+            return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
         }
         catch
         {
@@ -150,6 +211,8 @@ public sealed class ZoneObjectPoolProbe
         value = BitConverter.ToUInt32(bytes, 0);
         return true;
     }
+
+    private sealed record ZoneBinaryProfile(string Name, int PlayerLimit, int MobLimit, int NpcLimit);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
