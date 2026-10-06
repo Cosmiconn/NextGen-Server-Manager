@@ -1,0 +1,73 @@
+name: PowerShell Syntax
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+      - 'fix/**'
+      - 'ui/**'
+      - 'research/**'
+      - 'release/**'
+    paths:
+      - 'scripts/**/*.ps1'
+      - '.github/workflows/powershell-syntax.yml'
+  pull_request:
+    branches: [ develop, main ]
+    paths:
+      - 'scripts/**/*.ps1'
+      - '.github/workflows/powershell-syntax.yml'
+  workflow_dispatch:
+
+jobs:
+  syntax:
+    runs-on: windows-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptRoot = Join-Path $env:GITHUB_WORKSPACE 'scripts'
+          if (-not (Test-Path -LiteralPath $scriptRoot)) {
+            throw "Scripts directory missing: $scriptRoot"
+          }
+
+          $scripts = @(Get-ChildItem -LiteralPath $scriptRoot -Filter '*.ps1' -File -Recurse | Sort-Object FullName)
+          if ($scripts.Count -eq 0) {
+            throw 'No PowerShell scripts found to parse.'
+          }
+
+          $failures = [System.Collections.Generic.List[string]]::new()
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $script.FullName,
+              [ref]$tokens,
+              [ref]$parseErrors)
+
+            if ($parseErrors.Count -eq 0) {
+              Write-Host "OK  $($script.FullName.Substring($env:GITHUB_WORKSPACE.Length + 1))"
+              continue
+            }
+
+            foreach ($parseError in $parseErrors) {
+              $relative = $script.FullName.Substring($env:GITHUB_WORKSPACE.Length + 1)
+              $failures.Add(
+                "$relative:$($parseError.Extent.StartLineNumber):$($parseError.Extent.StartColumnNumber) $($parseError.Message)")
+            }
+          }
+
+          if ($failures.Count -gt 0) {
+            Write-Host 'PowerShell parse errors:'
+            $failures | ForEach-Object { Write-Host "  $_" }
+            throw "PowerShell syntax check failed with $($failures.Count) parse error(s)."
+          }
+
+          Write-Host "Parsed $($scripts.Count) PowerShell script(s) successfully."
