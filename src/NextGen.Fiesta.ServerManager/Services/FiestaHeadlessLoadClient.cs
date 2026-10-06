@@ -18,7 +18,8 @@ public sealed class FiestaHeadlessLoadClient
     public async Task<FiestaHeadlessProbeResult> ProbeAndHoldAsync(
         FiestaHeadlessProbeOptions options,
         FiestaLoadClientCredential credential,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<FiestaHeadlessClientProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(credential);
@@ -26,6 +27,18 @@ public sealed class FiestaHeadlessLoadClient
         credential.Validate();
 
         var stage = FiestaLoadClientStage.None;
+        void SetStage(FiestaLoadClientStage next, string detail = "")
+        {
+            stage = next;
+            progress?.Invoke(new FiestaHeadlessClientProgress(
+                credential.Username,
+                credential.CharacterName,
+                next,
+                detail,
+                DateTimeOffset.UtcNow));
+        }
+
+        SetStage(FiestaLoadClientStage.None, "Start");
         try
         {
             var passwordMd5 = credential.ResolvePasswordMd5();
@@ -35,11 +48,11 @@ public sealed class FiestaHeadlessLoadClient
                 options.LoginPort,
                 options.StepTimeout,
                 cancellationToken);
-            stage = FiestaLoadClientStage.LoginConnected;
+            SetStage(FiestaLoadClientStage.LoginConnected);
 
             await login.SendPacketAsync(3, 101, BuildVersionBody(options.ClientYear, options.ClientVersion), cancellationToken);
             await WaitForAsync(login, 3, 103, options.StepTimeout, cancellationToken);
-            stage = FiestaLoadClientStage.VersionAccepted;
+            SetStage(FiestaLoadClientStage.VersionAccepted);
 
             if (!string.IsNullOrWhiteSpace(options.FileHash))
             {
@@ -49,19 +62,19 @@ public sealed class FiestaHeadlessLoadClient
 
             await login.SendPacketAsync(3, 90, BuildLoginBody(credential.Username, passwordMd5, options.ClientTag), cancellationToken);
             await WaitForAsync(login, 3, 10, options.StepTimeout, cancellationToken);
-            stage = FiestaLoadClientStage.LoginAuthenticated;
+            SetStage(FiestaLoadClientStage.LoginAuthenticated);
 
             await login.SendPacketAsync(3, 11, new[] { options.WorldId }, cancellationToken);
             var worldRedirect = await WaitForAsync(login, 3, 12, options.StepTimeout, cancellationToken);
             var world = ParseWorldRedirect(worldRedirect.Body);
-            stage = FiestaLoadClientStage.WorldRedirectReceived;
+            SetStage(FiestaLoadClientStage.WorldRedirectReceived);
 
             await using var worldConnection = await FiestaWireConnection.ConnectAsync(
                 world.Host,
                 world.Port,
                 options.StepTimeout,
                 cancellationToken);
-            stage = FiestaLoadClientStage.WorldConnected;
+            SetStage(FiestaLoadClientStage.WorldConnected);
 
             await worldConnection.SendPacketAsync(3, 15, BuildWorldTransferBody(world.TransferKey), cancellationToken);
             var characterList = await WaitForAsync(worldConnection, 3, 20, options.StepTimeout, cancellationToken);
@@ -76,14 +89,14 @@ public sealed class FiestaHeadlessLoadClient
             await worldConnection.SendPacketAsync(4, 1, new[] { credential.Slot }, cancellationToken);
             var zoneRedirect = await WaitForAsync(worldConnection, 4, 3, options.StepTimeout, cancellationToken);
             var zone = ParseZoneRedirect(zoneRedirect.Body);
-            stage = FiestaLoadClientStage.ZoneRedirectReceived;
+            SetStage(FiestaLoadClientStage.ZoneRedirectReceived);
 
             await using var zoneConnection = await FiestaWireConnection.ConnectAsync(
                 zone.Host,
                 zone.Port,
                 options.StepTimeout,
                 cancellationToken);
-            stage = FiestaLoadClientStage.ZoneConnected;
+            SetStage(FiestaLoadClientStage.ZoneConnected);
 
             var zoneTransferPayload = BuildZoneTransferPayload(options, credential, randomId);
             await zoneConnection.SendDecryptedPayloadAsync(zoneTransferPayload, cancellationToken);
@@ -91,19 +104,19 @@ public sealed class FiestaHeadlessLoadClient
             // A successful original-client login emits the character-information cascade and ends it with SH4/72.
             // Waiting for that marker prevents a mere TCP connection from being counted as a successful player login.
             await WaitForAsync(zoneConnection, 4, 72, options.ZoneLoginTimeout, cancellationToken);
-            stage = FiestaLoadClientStage.ZoneAuthenticated;
+            SetStage(FiestaLoadClientStage.ZoneAuthenticated);
 
             await zoneConnection.SendPacketAsync(6, 3, ReadOnlyMemory<byte>.Empty, cancellationToken);
-            stage = FiestaLoadClientStage.ClientReady;
+            SetStage(FiestaLoadClientStage.ClientReady);
 
             var holdFor = options.HoldDuration;
             if (holdFor > TimeSpan.Zero)
             {
-                stage = FiestaLoadClientStage.Holding;
+                SetStage(FiestaLoadClientStage.Holding);
                 await HoldSessionAsync(zoneConnection, holdFor, cancellationToken);
             }
 
-            stage = FiestaLoadClientStage.Completed;
+            SetStage(FiestaLoadClientStage.Completed);
             return new FiestaHeadlessProbeResult
             {
                 Success = true,
@@ -119,6 +132,13 @@ public sealed class FiestaHeadlessLoadClient
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            progress?.Invoke(new FiestaHeadlessClientProgress(
+                credential.Username,
+                credential.CharacterName,
+                stage,
+                "Abgebrochen",
+                DateTimeOffset.UtcNow,
+                Failed: true));
             return new FiestaHeadlessProbeResult
             {
                 Success = false,
@@ -129,6 +149,13 @@ public sealed class FiestaHeadlessLoadClient
         }
         catch (Exception ex)
         {
+            progress?.Invoke(new FiestaHeadlessClientProgress(
+                credential.Username,
+                credential.CharacterName,
+                stage,
+                ex.Message,
+                DateTimeOffset.UtcNow,
+                Failed: true));
             return new FiestaHeadlessProbeResult
             {
                 Success = false,
@@ -433,6 +460,14 @@ public sealed class FiestaHeadlessProbeResult
 }
 
 public readonly record struct FiestaProtocolSelfTestResult(bool Success, string Detail);
+
+public readonly record struct FiestaHeadlessClientProgress(
+    string Username,
+    string CharacterName,
+    FiestaLoadClientStage Stage,
+    string Detail,
+    DateTimeOffset TimestampUtc,
+    bool Failed = false);
 
 /// <summary>
 /// Template of one real, already decrypted NA2016 client -> Zone CH6/1 packet.
