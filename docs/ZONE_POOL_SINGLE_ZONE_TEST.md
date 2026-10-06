@@ -164,22 +164,50 @@ Get-Content 'C:\NextGenFiestaServer\Zone00\Zone.exe.nextgen-deployment.json' -Ra
 
 Nur wenn Ziel-/Backup-Hashes exakt den oben genannten Werten entsprechen, darf der eigentliche Runtime-Test beginnen.
 
-## 10. Runtime-Test – noch bewusst manuell
+## 10. Runtime-Test – genau eine Zone, Start weiterhin manuell
 
-Der Manager startet die gepatchte Zone in diesem Forschungsstand **nicht automatisch**. Für den ersten Test soll genau eine Zone kontrolliert gestartet und sofort beobachtet werden.
+Der Manager startet die gepatchte Zone in diesem Forschungsstand **nicht automatisch**. Für den ersten Test genau diese eine Zone kontrolliert starten. Keine zweite `Zone.exe` parallel starten.
 
-Zu prüfen:
+Direkt danach in einer **als Administrator gestarteten PowerShell** den read-only Observer ausführen:
 
-- Prozess bleibt stabil und beendet sich nicht unmittelbar.
+```powershell
+.\scripts\Test-ZonePoolRuntimeState.ps1 `
+  -TargetZoneExe 'C:\NextGenFiestaServer\Zone00\Zone.exe' `
+  -WaitSeconds 120 `
+  -MinimumUptimeSeconds 10
+```
+
+Der Observer startet oder stoppt nichts. Er wartet nur auf Initialisierung und liefert ausschließlich `WAIT`, `BLOCKED` oder `PASS`.
+
+Ein `PASS` setzt gleichzeitig voraus:
+
+- Deployment-JSON steht weiterhin auf `DEPLOYED` und beschreibt exakt das Profil 2000/12000/512 mit 83 Sites.
+- Ziel-`Zone.exe` besitzt weiterhin SHA-256 `B8A6688A...83EAC`.
+- Baseline-Backup besitzt weiterhin SHA-256 `DB1CB429...AFF5`.
+- exakt **ein** Prozess namens `Zone` läuft.
+- dieser Prozess wurde aus exakt der deployed `Zone.exe` gestartet und startete erst nach dem registrierten Deployment.
+- der laufende Prozess ist mindestens die angegebene Mindestzeit aktiv.
+- der hashgebundene read-only `ShineObjectManager`-Probe liest im Prozess tatsächlich:
+  - ShinePlayer `l_MaxSize = 2000`
+  - ShineMob `l_MaxSize = 12000`
+  - ShineNPC `l_MaxSize = 512`
+- die aktuelle `l_ListNum`-Belegung überschreitet keinen dieser Maximalwerte.
+
+Erwartetes Ende:
+
+```text
+RUNTIME TEST: PASS
+```
+
+Zusätzlich weiter manuell prüfen:
+
+- Prozess bleibt stabil und beendet sich nicht unmittelbar oder kurz nach dem PASS.
 - Startup-Logs enthalten keine neuen Parser-, Allocator-, Handle- oder Poolfehler.
-- Die Runtime-Kapazitätsmessung meldet für die getestete Zone die erwarteten Maxima:
-  - ShinePlayer `2000`
-  - ShineMob `12000`
-  - ShineNPC `512`
-- Live-Belegung bleibt plausibel und überschreitet keine Maxima.
 - Handle-/Objektfehler, `Too many ...`, Allocation-Fehler oder ungewöhnliche Access-Violations führen zum sofortigen Abbruch des Tests.
 
-Erst nach erfolgreichem Runtime-Test kann über eine breitere Deployment-Automatisierung nachgedacht werden.
+Der Runtime-Observer beweist das aktive Binärprofil und die drei Pool-Maxima. Er ersetzt **nicht** die Log- und Stabilitätsprüfung.
+
+Erst nach erfolgreichem Runtime-PASS **und** unauffälligen Logs/Stabilität kann über eine breitere Deployment-Automatisierung nachgedacht werden.
 
 ## 11. Kontrollierter Rollback
 
@@ -217,6 +245,8 @@ Statisch zertifiziert und als Offline-/Ein-Zonen-Testpfad implementiert:
 - atomarer Testdeployment-Pfad
 - Baseline-Backup, Deployment-Metadaten und atomarer Rollback
 - isolierter Deployment/Rollback-End-to-End-Selbsttest
+- dual hash-bound Runtime-Poolprobe für Stock und das zertifizierte 2000/12000/512-Profil
+- read-only Runtime-Test-Observer mit `WAIT` / `BLOCKED` / `PASS`
 
 Noch **nicht** freigegeben:
 
@@ -225,4 +255,4 @@ Noch **nicht** freigegeben:
 - andere Player/Mob/NPC-Zielprofile
 - Live-Prozesspatching
 - In-Place-Patching ohne Backup/Transaktion
-- Produktionseinsatz ohne erfolgreichen realen Runtime-Test
+- Produktionseinsatz ohne erfolgreichen realen Runtime-Test plus Log-/Stabilitätsprüfung
