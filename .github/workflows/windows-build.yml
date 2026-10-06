@@ -96,14 +96,20 @@ jobs:
 
           $startupLog = Join-Path $env:LOCALAPPDATA 'NextGenFiestaServerManager\startup.log'
           Remove-Item -LiteralPath $startupLog -Force -ErrorAction SilentlyContinue
+          $uiSmokeDir = Join-Path $env:GITHUB_WORKSPACE 'artifacts\ui-smoke'
+          if (Test-Path -LiteralPath $uiSmokeDir) {
+            Remove-Item -LiteralPath $uiSmokeDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $uiSmokeDir | Out-Null
 
-          # Production startup ignores this unless explicitly set. In CI it asks the
-          # real WPF dispatcher to traverse the responsive breakpoints before success.
+          # Production startup ignores these unless explicitly set. In CI they ask the
+          # real WPF dispatcher to traverse breakpoints and render the settled frames.
           $env:NEXTGEN_UI_SMOKE_RESIZE = '1'
+          $env:NEXTGEN_UI_SMOKE_SCREENSHOT_DIR = $uiSmokeDir
           $process = Start-Process -FilePath $exe -PassThru
 
           try {
-            $deadline = (Get-Date).AddSeconds(20)
+            $deadline = (Get-Date).AddSeconds(25)
             $shown = $false
             $resized = $false
             while ((Get-Date) -lt $deadline) {
@@ -136,17 +142,26 @@ jobs:
             $startupText = if (Test-Path -LiteralPath $startupLog) { Get-Content -LiteralPath $startupLog -Raw } else { '<startup.log missing>' }
             Write-Host $startupText
             if (-not $shown) {
-              throw 'MainWindow did not report successful Show() within 20 seconds.'
+              throw 'MainWindow did not report successful Show() within 25 seconds.'
             }
             if (-not $resized) {
-              throw 'Responsive resize smoke did not complete within 20 seconds.'
+              throw 'Responsive resize smoke did not complete within 25 seconds.'
             }
             if ($startupText -match 'FATAL ') {
               throw 'WPF runtime smoke log contains a fatal exception.'
             }
-            if ($startupText -notmatch 'target=720x620') {
-              throw 'Responsive smoke did not reach the narrow 720x620 breakpoint.'
+            if ($startupText -notmatch 'target=720x620 actual=720x620') {
+              throw 'Responsive smoke did not actually reach the 720x620 breakpoint.'
             }
+
+            $screenshots = @(Get-ChildItem -LiteralPath $uiSmokeDir -Filter '*.png' -File)
+            if ($screenshots.Count -lt 4) {
+              throw "Expected at least four rendered UI screenshots, found $($screenshots.Count)."
+            }
+            if (-not ($screenshots.Name -match 'ui-target-720x620-actual-720x620\.png')) {
+              throw 'Missing exact 720x620 rendered UI screenshot.'
+            }
+            Write-Host "Rendered UI screenshots: $($screenshots.Name -join ', ')"
 
             $process.Refresh()
             if ($process.HasExited) {
@@ -155,6 +170,7 @@ jobs:
           }
           finally {
             Remove-Item Env:NEXTGEN_UI_SMOKE_RESIZE -ErrorAction SilentlyContinue
+            Remove-Item Env:NEXTGEN_UI_SMOKE_SCREENSHOT_DIR -ErrorAction SilentlyContinue
             $process.Refresh()
             if (-not $process.HasExited) {
               Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
@@ -166,4 +182,11 @@ jobs:
         with:
           name: NextGen-Fiesta-Server-Manager-win-x64
           path: artifacts/win-x64
+          if-no-files-found: error
+
+      - name: Upload UI smoke screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: NextGen-Fiesta-Server-Manager-ui-smoke
+          path: artifacts/ui-smoke
           if-no-files-found: error
