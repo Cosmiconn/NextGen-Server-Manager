@@ -1,5 +1,7 @@
 using System.Text;
 using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace NextGen.Fiesta.ServerManager;
@@ -75,12 +77,14 @@ public partial class App : System.Windows.Application
                 window.Height = Math.Max(window.MinHeight, target.Height);
 
                 // Give WPF rendering, SizeChanged handlers and queued responsive passes
-                // enough dispatcher turns to settle before the next breakpoint.
+                // enough dispatcher turns to settle before inspecting/capturing the frame.
                 await Task.Delay(450);
+                window.UpdateLayout();
                 Log(
                     $"UI_SMOKE_RESIZE target={target.Width:F0}x{target.Height:F0} " +
                     $"actual={window.ActualWidth:F0}x{window.ActualHeight:F0} " +
                     $"min={window.MinWidth:F0}x{window.MinHeight:F0}");
+                CaptureUiSmokeScreenshot(window, target.Width, target.Height);
             }
 
             window.Width = Math.Max(window.MinWidth, originalWidth);
@@ -93,6 +97,30 @@ public partial class App : System.Windows.Application
             ReportFatal("UI_SMOKE_RESIZE", ex);
             Current.Shutdown(-3);
         }
+    }
+
+    private static void CaptureUiSmokeScreenshot(MainWindow window, double targetWidth, double targetHeight)
+    {
+        var outputDirectory = Environment.GetEnvironmentVariable("NEXTGEN_UI_SMOKE_SCREENSHOT_DIR");
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+            return;
+
+        Directory.CreateDirectory(outputDirectory);
+        window.UpdateLayout();
+
+        var width = Math.Max(1, (int)Math.Ceiling(window.ActualWidth));
+        var height = Math.Max(1, (int)Math.Ceiling(window.ActualHeight));
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(window);
+
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        var fileName = $"ui-target-{targetWidth:F0}x{targetHeight:F0}-actual-{width}x{height}.png";
+        var path = Path.Combine(outputDirectory, fileName);
+        using (var stream = File.Create(path))
+            encoder.Save(stream);
+
+        Log($"UI_SMOKE_SCREENSHOT {fileName}");
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
