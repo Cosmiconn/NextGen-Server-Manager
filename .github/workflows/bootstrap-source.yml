@@ -4,13 +4,16 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'baseline/0.3.4/**'
-      - 'scripts/Restore-Baseline.ps1'
+      - 'NextGen-Fiesta-Server-Manager-0.3.4-Hardware-Aware.zip'
       - '.github/workflows/bootstrap-source.yml'
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: bootstrap-source-main
+  cancel-in-progress: false
 
 jobs:
   expand-source:
@@ -23,7 +26,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Stop when source tree is already present
+      - name: Check whether expanded source already exists
         id: sourcecheck
         shell: pwsh
         run: |
@@ -34,13 +37,50 @@ jobs:
           }
           else {
             'present=false' >> $env:GITHUB_OUTPUT
-            Write-Host 'Expanded source tree missing; importing baseline.'
+            Write-Host 'Expanded source tree missing; importing 0.3.4 archive.'
           }
 
-      - name: Restore 0.3.4 baseline archive
+      - name: Validate and expand 0.3.4 archive
         if: steps.sourcecheck.outputs.present != 'true'
         shell: pwsh
-        run: .\scripts\Restore-Baseline.ps1 -Destination "$env:GITHUB_WORKSPACE\_restored-source"
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $repo = $env:GITHUB_WORKSPACE
+          $archive = Join-Path $repo 'NextGen-Fiesta-Server-Manager-0.3.4-Hardware-Aware.zip'
+          $expectedSha256 = '140143278290fb96c1dd4ef047229c4b8c4b26c9826def0a5d4ebcac1bd2dba7'
+
+          if (-not (Test-Path -LiteralPath $archive)) {
+            throw "Baseline archive not found: $archive"
+          }
+
+          $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "Baseline ZIP checksum mismatch. Expected $expectedSha256, got $actualSha256"
+          }
+
+          $restore = Join-Path $repo '_restored-source'
+          if (Test-Path -LiteralPath $restore) {
+            Remove-Item -LiteralPath $restore -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $restore | Out-Null
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $restore)
+
+          $solution = Get-ChildItem -LiteralPath $restore -Filter 'NextGen.Fiesta.ServerManager.sln' -File -Recurse | Select-Object -First 1
+          if (-not $solution) {
+            throw 'Expanded baseline does not contain NextGen.Fiesta.ServerManager.sln.'
+          }
+
+          $sourceRoot = $solution.Directory.FullName
+          $project = Join-Path $sourceRoot 'src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj'
+          if (-not (Test-Path -LiteralPath $project)) {
+            throw "Expanded baseline does not contain the expected WPF project: $project"
+          }
+
+          Write-Host "Validated baseline root: $sourceRoot"
+          "RESTORED_SOURCE_ROOT=$sourceRoot" >> $env:GITHUB_ENV
 
       - name: Import source tree into repository root
         if: steps.sourcecheck.outputs.present != 'true'
@@ -48,24 +88,25 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $repo = $env:GITHUB_WORKSPACE
-          $src = Join-Path $repo '_restored-source'
+          $src = $env:RESTORED_SOURCE_ROOT
 
-          if (-not (Test-Path (Join-Path $src 'src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj'))) {
-            throw 'Restored baseline does not contain the expected project tree.'
+          if (-not $src -or -not (Test-Path -LiteralPath $src)) {
+            throw 'RESTORED_SOURCE_ROOT is missing.'
           }
 
-          # Preserve the repository-specific handoff/workflow README. The restored
-          # source contributes the solution, src tree, build scripts and technical docs.
-          $repoReadme = Get-Content -Raw -LiteralPath (Join-Path $repo 'README.md')
-
-          Get-ChildItem -LiteralPath $src -Force | ForEach-Object {
+          # README.md in the repository is the handoff/navigation README and is
+          # intentionally preserved. Technical source docs from the ZIP are copied
+          # additively into docs/; repository-specific handoff docs remain in place.
+          Get-ChildItem -LiteralPath $src -Force | Where-Object { $_.Name -ne 'README.md' } | ForEach-Object {
             Copy-Item -LiteralPath $_.FullName -Destination $repo -Recurse -Force
           }
 
-          Set-Content -LiteralPath (Join-Path $repo 'README.md') -Value $repoReadme -Encoding utf8
-          Remove-Item -LiteralPath $src -Recurse -Force
+          $restore = Join-Path $repo '_restored-source'
+          if (Test-Path -LiteralPath $restore) {
+            Remove-Item -LiteralPath $restore -Recurse -Force
+          }
 
-      - name: Commit expanded source tree
+      - name: Commit expanded 0.3.4 source tree
         if: steps.sourcecheck.outputs.present != 'true'
         shell: pwsh
         run: |
@@ -73,8 +114,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if (git diff --cached --quiet) {
-            Write-Host 'Source tree already present; nothing to commit.'
+            Write-Host 'Nothing to commit.'
             exit 0
           }
-          git commit -m "Import 0.3.4 source tree"
+          git commit -m "Import tested 0.3.4 source tree"
           git push origin HEAD:main
