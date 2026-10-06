@@ -24,17 +24,49 @@ jobs:
       - name: Resolve source tree
         shell: pwsh
         run: |
-          $project = Join-Path $env:GITHUB_WORKSPACE 'src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj'
-          if (Test-Path $project) {
-            "SOURCE_ROOT=$env:GITHUB_WORKSPACE" >> $env:GITHUB_ENV
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_WORKSPACE
+          $project = Join-Path $repo 'src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj'
+
+          if (Test-Path -LiteralPath $project) {
+            "SOURCE_ROOT=$repo" >> $env:GITHUB_ENV
             Write-Host 'Using expanded source tree from repository root.'
+            exit 0
           }
-          else {
-            $restored = Join-Path $env:GITHUB_WORKSPACE '_restored-source'
-            .\scripts\Restore-Baseline.ps1 -Destination $restored
-            "SOURCE_ROOT=$restored" >> $env:GITHUB_ENV
-            Write-Host "Using restored 0.3.4 baseline source: $restored"
+
+          $archive = Join-Path $repo 'NextGen-Fiesta-Server-Manager-0.3.4-Hardware-Aware.zip'
+          $expectedSha256 = '140143278290fb96c1dd4ef047229c4b8c4b26c9826def0a5d4ebcac1bd2dba7'
+          if (-not (Test-Path -LiteralPath $archive)) {
+            throw "Neither expanded source nor baseline ZIP is available. Missing: $archive"
           }
+
+          $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "Baseline ZIP checksum mismatch. Expected $expectedSha256, got $actualSha256"
+          }
+
+          $restore = Join-Path $repo '_restored-source'
+          if (Test-Path -LiteralPath $restore) {
+            Remove-Item -LiteralPath $restore -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $restore | Out-Null
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $restore)
+
+          $solution = Get-ChildItem -LiteralPath $restore -Filter 'NextGen.Fiesta.ServerManager.sln' -File -Recurse | Select-Object -First 1
+          if (-not $solution) {
+            throw 'Baseline ZIP does not contain NextGen.Fiesta.ServerManager.sln.'
+          }
+
+          $sourceRoot = $solution.Directory.FullName
+          $restoredProject = Join-Path $sourceRoot 'src\NextGen.Fiesta.ServerManager\NextGen.Fiesta.ServerManager.csproj'
+          if (-not (Test-Path -LiteralPath $restoredProject)) {
+            throw "Restored WPF project missing: $restoredProject"
+          }
+
+          "SOURCE_ROOT=$sourceRoot" >> $env:GITHUB_ENV
+          Write-Host "Using restored 0.3.4 baseline source: $sourceRoot"
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
