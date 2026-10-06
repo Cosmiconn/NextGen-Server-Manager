@@ -199,17 +199,55 @@ Erwartetes Ende:
 RUNTIME TEST: PASS
 ```
 
+## 11. 5-Minuten-Stabilitätswache
+
+Nach dem ersten `RUNTIME TEST: PASS` denselben laufenden Prozess weiter beobachten:
+
+```powershell
+.\scripts\Watch-ZonePoolRuntimeStability.ps1 `
+  -TargetZoneExe 'C:\NextGenFiestaServer\Zone00\Zone.exe' `
+  -DurationSeconds 300 `
+  -SampleIntervalSeconds 5 `
+  -InitialWaitSeconds 120 `
+  -MinimumUptimeSeconds 10
+```
+
+Die Wache ist vollständig read-only. Beim ersten PASS werden fest gepinnt:
+
+- PID
+- Prozessstartzeit
+- Ziel- und Backup-SHA
+- Binary-Profil `NEXTGEN_CERTIFIED_2000_12000_512`
+- Player-/Mob-/NPC-Maxima
+
+Während des kompletten Beobachtungsfensters muss **jeder** Sample erneut PASS sein. Folgende Ereignisse brechen den Test sofort ab:
+
+- Prozess beendet sich oder wird neu gestartet
+- PID oder Prozessstartzeit wechseln
+- eine zweite Zone wird gestartet
+- Ziel-/Backup-SHA ändern sich
+- Binary-Profil oder Binary-SHA ändern sich
+- Runtime-Maxima ändern sich oder können nicht mehr verifiziert werden
+- der Observer liefert `WAIT` oder `BLOCKED`
+
+Erwartetes Ende:
+
+```text
+RUNTIME STABILITY TEST: PASS
+```
+
+Die Ausgabe enthält außerdem die höchste während des Fensters beobachtete Player-/Mob-/NPC-Belegung.
+
 Zusätzlich weiter manuell prüfen:
 
-- Prozess bleibt stabil und beendet sich nicht unmittelbar oder kurz nach dem PASS.
-- Startup-Logs enthalten keine neuen Parser-, Allocator-, Handle- oder Poolfehler.
+- Startup- und Service-Logs enthalten keine **neuen** Parser-, Allocator-, Handle- oder Poolfehler.
 - Handle-/Objektfehler, `Too many ...`, Allocation-Fehler oder ungewöhnliche Access-Violations führen zum sofortigen Abbruch des Tests.
 
-Der Runtime-Observer beweist das aktive Binärprofil und die drei Pool-Maxima. Er ersetzt **nicht** die Log- und Stabilitätsprüfung.
+Runtime-Observer und Stabilitätswache beweisen aktives Binärprofil, Pool-Maxima und Prozesskontinuität. Sie ersetzen **nicht** die Logprüfung.
 
-Erst nach erfolgreichem Runtime-PASS **und** unauffälligen Logs/Stabilität kann über eine breitere Deployment-Automatisierung nachgedacht werden.
+Erst nach erfolgreichem Runtime-PASS, erfolgreichem Stabilitäts-PASS **und** unauffälligen neuen Logs kann über eine breitere Deployment-Automatisierung nachgedacht werden.
 
-## 11. Kontrollierter Rollback
+## 12. Kontrollierter Rollback
 
 Alle Zone-Prozesse wieder stoppen. Anschließend:
 
@@ -247,6 +285,8 @@ Statisch zertifiziert und als Offline-/Ein-Zonen-Testpfad implementiert:
 - isolierter Deployment/Rollback-End-to-End-Selbsttest
 - dual hash-bound Runtime-Poolprobe für Stock und das zertifizierte 2000/12000/512-Profil
 - read-only Runtime-Test-Observer mit `WAIT` / `BLOCKED` / `PASS`
+- read-only Runtime-Stabilitätswache mit gepinnter PID/Startzeit/Hashes/Profil/Maxima
+- Windows-PowerShell-Syntax-Gate für sämtliche `scripts/*.ps1`
 
 Noch **nicht** freigegeben:
 
@@ -255,4 +295,4 @@ Noch **nicht** freigegeben:
 - andere Player/Mob/NPC-Zielprofile
 - Live-Prozesspatching
 - In-Place-Patching ohne Backup/Transaktion
-- Produktionseinsatz ohne erfolgreichen realen Runtime-Test plus Log-/Stabilitätsprüfung
+- Produktionseinsatz ohne erfolgreichen realen Runtime-Test plus Stabilitäts- und Logprüfung
