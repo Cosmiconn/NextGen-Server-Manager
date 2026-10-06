@@ -60,7 +60,7 @@ jobs:
             foreach ($parseError in $parseErrors) {
               $relative = $script.FullName.Substring($env:GITHUB_WORKSPACE.Length + 1)
               $failures.Add(
-                "$relative:$($parseError.Extent.StartLineNumber):$($parseError.Extent.StartColumnNumber) $($parseError.Message)")
+                "${relative}:$($parseError.Extent.StartLineNumber):$($parseError.Extent.StartColumnNumber) $($parseError.Message)")
             }
           }
 
