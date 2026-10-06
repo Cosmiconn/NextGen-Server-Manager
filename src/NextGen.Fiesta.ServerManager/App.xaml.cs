@@ -74,6 +74,16 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(clientCaptureSelfTest.Detail);
             Log("CLIENT_CAPTURE_PROFILE_SELFTEST PASS · " + clientCaptureSelfTest.Detail);
 
+            var characterCreateSelfTest = FiestaCharacterCreateCaptureImporter.RunSelfTest();
+            if (!characterCreateSelfTest.Success)
+                throw new InvalidOperationException(characterCreateSelfTest.Detail);
+            Log("CHARACTER_CREATE_CAPTURE_SELFTEST PASS · " + characterCreateSelfTest.Detail);
+
+            var identitySelfTest = FiestaLoadIdentityGenerator.RunSelfTest();
+            if (!identitySelfTest.Success)
+                throw new InvalidOperationException(identitySelfTest.Detail);
+            Log("LOAD_IDENTITY_SELFTEST PASS · " + identitySelfTest.Detail);
+
             var originalWidth = window.Width;
             var originalHeight = window.Height;
             var targets = new (double Width, double Height)[]
