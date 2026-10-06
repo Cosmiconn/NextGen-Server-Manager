@@ -1,0 +1,666 @@
+<Window x:Class="NextGen.Fiesta.ServerManager.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NextGen Fiesta Server Manager" Height="880" Width="1450" MinHeight="700" MinWidth="1080">
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="NEXTGEN FIESTA SERVER MANAGER" FontSize="26" FontWeight="SemiBold"/>
+                <TextBlock Text="NA2016 Diagnose · Service Control · Smart Start · PDB/Symbolanalyse" Foreground="{StaticResource Muted}" Margin="0,4,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" HorizontalAlignment="Right">
+                <TextBlock Text="{Binding HealthText}" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                <TextBlock Text="{Binding AdminText}" Foreground="{StaticResource Muted}" HorizontalAlignment="Right"/>
+                <Button Content="Als Administrator neu starten" Command="{Binding RunElevatedCommand}" HorizontalAlignment="Right" Padding="9,4"/>
+            </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Server Root" VerticalAlignment="Center" Margin="4,0,10,0" Foreground="{StaticResource Muted}"/>
+                <TextBox Grid.Column="1" Text="{Binding ServerRoot, UpdateSourceTrigger=PropertyChanged}" MinWidth="450"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button Content="Ordner…" Command="{Binding BrowseRootCommand}"/>
+                    <Button Content="Scannen" Command="{Binding ScanCommand}"/>
+                    <Button Content="Status aktualisieren" Command="{Binding RefreshCommand}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <TabControl Grid.Row="2">
+            <TabItem Header="Dashboard">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="1.35*"/>
+                        <ColumnDefinition Width="0.65*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <DataGrid Grid.Column="0" ItemsSource="{Binding Services}" SelectedItem="{Binding SelectedService}" AlternationCount="2" Margin="0,0,8,0" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Health" Binding="{Binding HealthSymbol}" Width="55"/>
+                            <DataGridTextColumn Header="Dienst" Binding="{Binding DisplayName}" Width="120"/>
+                            <DataGridTextColumn Header="Windows Service" Binding="{Binding ServiceName}" Width="135"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding StatusText}" Width="150"/>
+                            <DataGridTextColumn Header="Client Port" Binding="{Binding ClientPort}" Width="90"/>
+                            <DataGridTextColumn Header="Clients" Binding="{Binding EstablishedClientConnections}" Width="65"/>
+                            <DataGridCheckBoxColumn Header="Port offen" Binding="{Binding PortOpen}" Width="80"/>
+                            <DataGridTextColumn Header="PID" Binding="{Binding ProcessId}" Width="70"/>
+                            <DataGridTextColumn Header="Port PID" Binding="{Binding PortOwnerPid}" Width="70"/>
+                            <DataGridTextColumn Header="CPU" Binding="{Binding CpuText}" Width="65"/>
+                            <DataGridTextColumn Header="RAM" Binding="{Binding MemoryText}" Width="75"/>
+                            <DataGridTextColumn Header="Handles" Binding="{Binding HandleCount}" Width="70"/>
+                            <DataGridTextColumn Header="Startzeit" Binding="{Binding ProcessStartTime, StringFormat=HH:mm:ss}" Width="82"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <Border Grid.Column="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="12">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <TextBlock Text="Ausgewählter Dienst" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding SelectedService.DisplayName}" FontSize="24" Margin="0,8,0,0"/>
+                                <TextBlock Text="{Binding SelectedService.StatusText}" Foreground="{StaticResource Muted}"/>
+                                <Separator Margin="0,10"/>
+                                <TextBlock Text="Service" Foreground="{StaticResource Muted}"/>
+                                <TextBlock Text="{Binding SelectedService.ServiceName}"/>
+                                <TextBlock Text="EXE" Foreground="{StaticResource Muted}" Margin="0,8,0,0"/>
+                                <TextBlock Text="{Binding SelectedService.ExecutablePath}" TextWrapping="Wrap"/>
+                                <TextBlock Text="Config" Foreground="{StaticResource Muted}" Margin="0,8,0,0"/>
+                                <TextBlock Text="{Binding SelectedService.ConfigPath}" TextWrapping="Wrap"/>
+                                <TextBlock Text="Ports" Foreground="{StaticResource Muted}" Margin="0,8,0,0"/>
+                                <TextBlock>
+                                    <Run Text="Client "/><Run Text="{Binding SelectedService.ClientPort}"/><Run Text=" · intern "/><Run Text="{Binding SelectedService.InternalPort}"/><Run Text=" · OPTool "/><Run Text="{Binding SelectedService.OptoolPort}"/>
+                                </TextBlock>
+                                <Separator Margin="0,12"/>
+                                <UniformGrid Columns="2">
+                                    <Button Content="Start" Command="{Binding StartCommand}"/>
+                                    <Button Content="Stop" Command="{Binding StopCommand}"/>
+                                    <Button Content="Neustart" Command="{Binding RestartCommand}"/>
+                                    <Button Content="Recovery setzen" Command="{Binding ConfigureRecoveryCommand}"/>
+                                    <Button Content="Neu installieren" Command="{Binding ReinstallCommand}"/>
+                                    <Button Content="Dienst löschen" Command="{Binding UninstallCommand}"/>
+                                    <Button Content="Ordner öffnen" Command="{Binding OpenFolderCommand}"/>
+                                    <Button Content="Config öffnen" Command="{Binding OpenConfigCommand}"/>
+                                </UniformGrid>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Border>
+
+                    <Border Grid.Row="1" Grid.ColumnSpan="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="8" Margin="0,8,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Smart Orchestration" FontWeight="SemiBold" Margin="3"/>
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Smart Start" Command="{Binding SmartStartCommand}" Padding="18,8"/>
+                                <Button Content="Smart Stop" Command="{Binding SmartStopCommand}" Padding="18,8"/>
+                                <Button Content="Smart Restart" Command="{Binding SmartRestartCommand}" Padding="18,8"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+
+            <TabItem Header="Zone Auslastung / Scaling">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Live-Zone-Kapazität" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding ZoneCapacitySummary}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                                <TextBlock Text="{Binding ScaleRecommendationText}" TextWrapping="Wrap" Margin="0,5,12,0"/>
+                                <TextBlock Text="{Binding WorldManagerCapacity.Summary}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,5,12,0"/>
+                                <TextBlock Text="{Binding WorldManagerCapacity.Recommendation}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,2,12,0"/>
+                                <TextBlock Text="Messwerte: etablierte TCP-Client-Sessions, CPU-Core-Druck, Privat-/Working-Set-RAM und konfigurierte Maps. Mob-/NPC-Poolbelegung wird nicht erfunden; Überlaufmeldungen aus Logs werden separat als Diagnose erfasst." Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="Auslastung aktualisieren" Command="{Binding RefreshZoneCapacityCommand}" Padding="12,7"/>
+                                <Button Content="Neue Zone planen" Command="{Binding PlanNewZoneCommand}" Padding="12,7" Margin="6,0,0,0"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding ZoneCapacities}" AlternationCount="2" IsReadOnly="True" Margin="0,0,0,8">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Zone" Binding="{Binding ZoneName}" Width="70"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding State}" Width="85"/>
+                            <DataGridTextColumn Header="Clients" Binding="{Binding ClientText}" Width="100"/>
+                            <DataGridTextColumn Header="Client %" Binding="{Binding ClientPercentText}" Width="75"/>
+                            <DataGridTextColumn Header="CPU" Binding="{Binding CpuText}" Width="155"/>
+                            <DataGridTextColumn Header="RAM" Binding="{Binding MemoryText}" Width="180"/>
+                            <DataGridTextColumn Header="Maps / BlockInfo" Binding="{Binding MapText}" Width="120"/>
+                            <DataGridTextColumn Header="Gesamt" Binding="{Binding OverallText}" Width="70"/>
+                            <DataGridTextColumn Header="Druck" Binding="{Binding Pressure}" Width="85"/>
+                            <DataGridTextColumn Header="Trend" Binding="{Binding Trend}" Width="105"/>
+                            <DataGridTextColumn Header="Empfehlung" Binding="{Binding Recommendation}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="125"/><ColumnDefinition Width="170"/>
+                                <ColumnDefinition Width="110"/><ColumnDefinition Width="250"/>
+                                <ColumnDefinition Width="110"/><ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <TextBlock Text="Provisionierungsplan" FontSize="16" FontWeight="SemiBold" Grid.ColumnSpan="6"/>
+                            <Button Grid.Column="6" Grid.RowSpan="3" Content="Zone jetzt anlegen" Command="{Binding CreateNewZoneCommand}" Padding="16,9" VerticalAlignment="Center"/>
+
+                            <TextBlock Grid.Row="1" Text="Neue Zone" Foreground="{StaticResource Muted}" Margin="0,6,0,0"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ProvisionPlan.ZoneName}" Margin="0,6,0,0"/>
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Template" Foreground="{StaticResource Muted}" Margin="0,6,0,0"/>
+                            <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding ProvisionPlan.SourceZoneName}" Margin="0,6,0,0"/>
+                            <TextBlock Grid.Row="1" Grid.Column="4" Text="Status" Foreground="{StaticResource Muted}" Margin="0,6,0,0"/>
+                            <TextBlock Grid.Row="1" Grid.Column="5" Text="{Binding ProvisionPlan.ValidText}" Margin="0,6,0,0"/>
+
+                            <TextBlock Grid.Row="2" Text="Ports" Foreground="{StaticResource Muted}" Margin="0,5,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding ProvisionPlan.PortsText}" Margin="0,5,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding ProvisionPlan.FirewallText}" Margin="0,5,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="4" Text="Ziel" Foreground="{StaticResource Muted}" Margin="0,5,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="5" Text="{Binding ProvisionPlan.TargetDirectory}" TextWrapping="Wrap" Margin="0,5,8,0"/>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Grid.Row="3" Text="{Binding ProvisionStatus}" Foreground="{StaticResource Muted}" TextWrapping="Wrap"/>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Performance / Vertical Scaling">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="0.85*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="1.15*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Vertikale Skalierung – weniger Zonen, mehr Leistung pro Prozess" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding PerformanceTuningSummary}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                                <TextBlock Text="{Binding HardwareSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,5,12,0"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,12,0"><TextBlock Text="Hardware-Modus: " Foreground="{StaticResource Accent}" FontWeight="SemiBold"/><TextBlock Text="{Binding HardwareScalingMode}" Foreground="{StaticResource Accent}"/></StackPanel>
+                                <TextBlock Text="{Binding HardwareAdvice}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,2,12,0"/>
+                                <TextBlock Text="Der Audit trennt Speicher-/Pool-Limits von CPU/Mainthread-Limits. Ein höheres Pool-Limit erhöht Kapazität, aber nicht automatisch die Tick-/AI-/Visibility-Leistung." Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Performance neu analysieren" Command="{Binding AnalyzePerformanceTuningCommand}" Padding="14,8" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding ProcessScaling}" AlternationCount="2" IsReadOnly="True" Margin="0,0,0,8">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Komponente" Binding="{Binding Component}" Width="135"/>
+                            <DataGridTextColumn Header="Architektur" Binding="{Binding ArchitectureText}" Width="100"/>
+                            <DataGridTextColumn Header="Threadmodell" Binding="{Binding ThreadModelText}" Width="135"/>
+                            <DataGridTextColumn Header="CPU" Binding="{Binding CpuText}" Width="80"/>
+                            <DataGridTextColumn Header="RAM" Binding="{Binding MemoryText}" Width="190"/>
+                            <DataGridTextColumn Header="Threads" Binding="{Binding ThreadCount}" Width="65"/>
+                            <DataGridTextColumn Header="Handles" Binding="{Binding HandleCount}" Width="70"/>
+                            <DataGridTextColumn Header="Sessions" Binding="{Binding SessionText}" Width="90"/>
+                            <DataGridTextColumn Header="CPU-Modell ~80%" Binding="{Binding EstimatedCpuCeilingText}" Width="115"/>
+                            <DataGridTextColumn Header="Vertikale Reserve" Binding="{Binding VerticalHeadroom}" Width="150"/>
+                            <DataGridTextColumn Header="Empfehlung" Binding="{Binding Recommendation}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock Grid.Row="2" Text="Tuning-Kandidaten / geplante Zielgrößen (noch kein automatischer Binary-Patch)" FontWeight="SemiBold" Margin="0,1,0,5"/>
+                    <DataGrid Grid.Row="3" ItemsSource="{Binding PerformanceTuningCandidates}" AlternationCount="2" IsReadOnly="True" Margin="0,0,0,8">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="95"/>
+                            <DataGridTextColumn Header="Ressource" Binding="{Binding Resource}" Width="145"/>
+                            <DataGridTextColumn Header="Stock" Binding="{Binding CurrentText}" Width="75"/>
+                            <DataGridTextColumn Header="Ziel" Binding="{Binding TargetText}" Width="75"/>
+                            <DataGridTextColumn Header="Rohspeicher" Binding="{Binding MemoryText}" Width="105"/>
+                            <DataGridTextColumn Header="Risiko" Binding="{Binding Risk}" Width="95"/>
+                            <DataGridTextColumn Header="Methode" Binding="{Binding Method}" Width="250"/>
+                            <DataGridTextColumn Header="Wirkung" Binding="{Binding Impact}" Width="280"/>
+                            <DataGridTextColumn Header="Beleg" Binding="{Binding Evidence}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <Border Grid.Row="4" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="9">
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}">Wichtig: Zone.exe und WorldManager.exe sind 32-Bit-Prozesse. LARGE_ADDRESS_AWARE erweitert den nutzbaren Adressraum auf einem 64-Bit-Windows, beseitigt aber weder Fragmentierung noch Mainthread-Limits. IOCP parallelisiert Netzwerk-I/O; die PDBs zeigen trotzdem einen zentralen ZoneServer-/WorldManager-Mainthread. Wenn CPU-Core dauerhaft nahe 100 % liegt, ist eine zusätzliche Zone normalerweise wirksamer als noch größere Objektpools.</TextBlock>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Adaptive Hooks">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Adaptive Hooks – konfigurieren, messen, dann anwenden" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding AdaptiveHookSummary}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                                <TextBlock Text="Freigegebene Hooks sind transaktional und build-/hashgebunden. Der WorldManager kann seinen Admission-Limit beim verifizierten NA2016-Build live erhalten; Hard-Pool-Vergrößerungen werden erst nach Neustart aktiv." Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="Neu bewerten" Command="{Binding AnalyzeAdaptiveHooksCommand}" Padding="12,7" Margin="0,0,6,0"/>
+                                <Button Content="Hook-Profil anwenden" Command="{Binding ApplyAdaptiveHooksCommand}" Padding="12,7" Margin="0,0,6,0"/>
+                                <Button Content="Letztes Backup" Command="{Binding RestoreAdaptiveHooksCommand}" Padding="12,7"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="Profile:" VerticalAlignment="Center" Margin="0,0,8,0" FontWeight="SemiBold"/>
+                                <Button Content="Sicher" Command="{Binding SetHookProfileCommand}" CommandParameter="safe" Padding="10,5" Margin="0,0,5,0"/>
+                                <Button Content="Ausgewogen" Command="{Binding SetHookProfileCommand}" CommandParameter="balanced" Padding="10,5" Margin="0,0,5,0"/>
+                                <Button Content="Leistung / Research" Command="{Binding SetHookProfileCommand}" CommandParameter="high" Padding="10,5"/>
+                            </StackPanel>
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/>
+                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/>
+                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/>
+                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/>
+                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/><ColumnDefinition Width="18"/>
+                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="90"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="WM Spieler" VerticalAlignment="Center"/><TextBox Grid.Column="1" Text="{Binding HookWmClientTarget, UpdateSourceTrigger=LostFocus}" Margin="5,0,0,0"/>
+                                <TextBlock Grid.Column="3" Text="WM S2S" VerticalAlignment="Center"/><TextBox Grid.Column="4" Text="{Binding HookWmZoneTarget, UpdateSourceTrigger=LostFocus}" Margin="5,0,0,0"/>
+                                <TextBlock Grid.Column="6" Text="Zone Listener" VerticalAlignment="Center"/><TextBox Grid.Column="7" Text="{Binding HookZoneClientTarget, UpdateSourceTrigger=LostFocus}" Margin="5,0,0,0"/>
+                                <TextBlock Grid.Column="9" Text="ShinePlayer" VerticalAlignment="Center"/><TextBox Grid.Column="10" Text="{Binding HookZonePlayerTarget, UpdateSourceTrigger=LostFocus}" Margin="5,0,0,0"/>
+                                <TextBlock Grid.Column="12" Text="ShineMob" VerticalAlignment="Center"/><TextBox Grid.Column="13" Text="{Binding HookZoneMobTarget, UpdateSourceTrigger=LostFocus}" Margin="5,0,0,0"/>
+                                <TextBlock Grid.Column="15" Text="ShineNPC" VerticalAlignment="Center"/><TextBox Grid.Column="16" Text="{Binding HookZoneNpcTarget, UpdateSourceTrigger=LostFocus}" Margin="5,0,0,0"/>
+                            </Grid>
+                            <WrapPanel Grid.Row="2" Margin="0,8,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="CPU Warn" VerticalAlignment="Center"/><TextBox Text="{Binding HookCpuWarnTarget, UpdateSourceTrigger=LostFocus}" Width="45" Margin="5,0,10,0"/>
+                                <TextBlock Text="CPU Block" VerticalAlignment="Center"/><TextBox Text="{Binding HookCpuBlockTarget, UpdateSourceTrigger=LostFocus}" Width="45" Margin="5,0,10,0"/>
+                                <TextBlock Text="RAM Warn %" VerticalAlignment="Center"/><TextBox Text="{Binding HookMemoryWarnTarget, UpdateSourceTrigger=LostFocus}" Width="45" Margin="5,0,10,0"/>
+                                <TextBlock Text="RAM Block %" VerticalAlignment="Center"/><TextBox Text="{Binding HookMemoryBlockTarget, UpdateSourceTrigger=LostFocus}" Width="45" Margin="5,0,16,0"/>
+                                <CheckBox IsChecked="{Binding AllowExperimentalZoneBinaryHooks}" Content="Experimentelle Zone-Binary-Hooks anfordern" VerticalAlignment="Center"/>
+                                <TextBlock Text="  (unvollständig verifizierte Handle-Rebases bleiben trotzdem gesperrt)" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
+                            </WrapPanel>
+                        </Grid>
+                    </Border>
+
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding AdaptiveHookAssessments}" AlternationCount="2" IsReadOnly="True" Margin="0,0,0,8">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="95"/>
+                            <DataGridTextColumn Header="Ressource" Binding="{Binding Resource}" Width="150"/>
+                            <DataGridTextColumn Header="Hook" Binding="{Binding HookType}" Width="145"/>
+                            <DataGridTextColumn Header="Aktuell" Binding="{Binding CurrentText}" Width="75"/>
+                            <DataGridTextColumn Header="Ziel" Binding="{Binding TargetText}" Width="75"/>
+                            <DataGridTextColumn Header="CPU" Binding="{Binding CpuText}" Width="80"/>
+                            <DataGridTextColumn Header="RAM aktuell → proj." Binding="{Binding MemoryText}" Width="155"/>
+                            <DataGridTextColumn Header="Entscheidung" Binding="{Binding Decision}" Width="95"/>
+                            <DataGridTextColumn Header="Anwendbar" Binding="{Binding ApplyText}" Width="85"/>
+                            <DataGridTextColumn Header="Begründung / Warnung" Binding="{Binding Reason}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <Border Grid.Row="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="9">
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}">Schutzlogik: ≥90% CPU eines Kerns oder projizierter 32-Bit-Privat-RAM nahe der Blockschwelle verhindert eine Erhöhung. Ab 70% gibt es eine Warnung. WM-Client-Sessions sind beim Baseline-Build dynamisch alloziert (Stride 0x1F7B8); der Live-Hook schreibt ausschließlich g_UserLimit und nur, wenn Ziel ≤ m_MaxSessions und der SHA-256 exakt passt. Zone-ShinePlayer/Mob/NPC werden noch nicht binär verändert, weil ihre 16-Bit-Objekthandle-Basen voneinander abhängen – ein Teilpatch wäre gefährlicher als eine zusätzliche Zone.</TextBlock>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Logs &amp; Diagnose">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="0.8*"/>
+                        <ColumnDefinition Width="1.2*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="0.75*"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Column="0" Margin="0,0,8,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,7">
+                            <TextBlock Text="Live-/Dateilog" FontSize="17" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding LogInventoryText}" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,2,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal">
+                            <ComboBox ItemsSource="{Binding LogFiles}" SelectedItem="{Binding SelectedLogPath}" MinWidth="360"/>
+                            <Button Content="Log neu laden" Command="{Binding ReloadLogCommand}"/>
+                            <Button Content="Live Start" Command="{Binding StartLiveCommand}"/>
+                            <Button Content="Live Stop" Command="{Binding StopLiveCommand}"/>
+                            <TextBlock Text="{Binding LiveStatusText}" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                        </StackPanel>
+                        <TextBox Grid.Row="2" Text="{Binding LogText, Mode=OneWay}" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                    </Grid>
+
+                    <Grid Grid.Column="1" Grid.RowSpan="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="160"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,7">
+                            <TextBlock Text="Diagnose" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <Button Content="Vollanalyse" Command="{Binding AnalyzeCommand}" Margin="12,0,0,0"/>
+                            <Button Content="Ausgewählte Reparatur anwenden" Command="{Binding ApplyRepairCommand}"/>
+                            <Button Content="Diagnosebericht exportieren" Command="{Binding ExportReportCommand}"/>
+                        </StackPanel>
+                        <DataGrid Grid.Row="1" ItemsSource="{Binding Diagnostics}" SelectedItem="{Binding SelectedIssue}" AlternationCount="2" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Schwere" Binding="{Binding SeverityText}" Width="75"/>
+                                <DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="120"/>
+                                <DataGridTextColumn Header="Titel" Binding="{Binding Title}" Width="220"/>
+                                <DataGridTextColumn Header="Dienst" Binding="{Binding ServiceName}" Width="105"/>
+                                <DataGridTextColumn Header="Konfidenz" Binding="{Binding ConfidenceText}" Width="80"/>
+                                <DataGridTextColumn Header="Quelle" Binding="{Binding Source}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <TextBlock Grid.Row="2" Text="Auswertung / Reparaturanweisung" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                        <Border Grid.Row="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="9">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding SelectedIssue.Description}" TextWrapping="Wrap"/>
+                                    <TextBlock Text="Empfehlung" FontWeight="SemiBold" Margin="0,8,0,2"/>
+                                    <TextBlock Text="{Binding SelectedIssue.Recommendation}" TextWrapping="Wrap"/>
+                                    <TextBlock Text="Beleg" FontWeight="SemiBold" Margin="0,8,0,2"/>
+                                    <TextBlock Text="{Binding SelectedIssue.Evidence}" FontFamily="Consolas" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
+
+                    <Border Grid.Row="1" Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="8" Margin="0,8,8,0">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                            <TextBlock Text="Aktivitäts-/Smart-Start-Protokoll" FontWeight="SemiBold"/>
+                            <TextBox Grid.Row="1" Text="{Binding ActivityText, Mode=OneWay}" FontFamily="Consolas" FontSize="12" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+
+            <TabItem Header="Live Timeline">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="1.35*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="0.65*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Live Server Timeline" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <Button Content="Monitor starten" Command="{Binding StartLiveCommand}" Margin="12,0,0,0"/>
+                        <Button Content="Monitor stoppen" Command="{Binding StopLiveCommand}"/>
+                        <Button Content="Timeline leeren" Command="{Binding ClearLiveCommand}"/>
+                        <Button Content="Bericht exportieren" Command="{Binding ExportReportCommand}"/>
+                        <TextBlock Text="{Binding LiveStatusText}" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </StackPanel>
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding LiveEvents}" AlternationCount="2" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Zeit" Binding="{Binding Timestamp, StringFormat=HH:mm:ss}" Width="80"/>
+                            <DataGridTextColumn Header="Schwere" Binding="{Binding Severity}" Width="80"/>
+                            <DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="120"/>
+                            <DataGridTextColumn Header="Quelle" Binding="{Binding Source}" Width="125"/>
+                            <DataGridTextColumn Header="DEP" Binding="{Binding Department}" Width="55"/>
+                            <DataGridTextColumn Header="CMD" Binding="{Binding Command}" Width="55"/>
+                            <DataGridTextColumn Header="Len" Binding="{Binding PacketLength}" Width="55"/>
+                            <DataGridTextColumn Header="Meldung" Binding="{Binding Message}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock Grid.Row="2" Text="Service-/Prozess-Transitions" FontWeight="SemiBold" Margin="0,10,0,5"/>
+                    <DataGrid Grid.Row="3" ItemsSource="{Binding RuntimeTransitions}" AlternationCount="2" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Zeit" Binding="{Binding TimeText}" Width="80"/>
+                            <DataGridTextColumn Header="Dienst" Binding="{Binding DisplayName}" Width="120"/>
+                            <DataGridTextColumn Header="Statuswechsel" Binding="{Binding StateText}" Width="180"/>
+                            <DataGridTextColumn Header="PID vorher" Binding="{Binding PreviousPid}" Width="85"/>
+                            <DataGridTextColumn Header="PID nachher" Binding="{Binding CurrentPid}" Width="85"/>
+                            <DataGridCheckBoxColumn Header="Port offen" Binding="{Binding PortOpen}" Width="80"/>
+                            <DataGridTextColumn Header="Erklärung" Binding="{Binding Reason}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="PDB / Symbole">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="170"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="PDBs indexieren" Command="{Binding IndexPdbCommand}"/>
+                        <TextBlock Text="Verwendet llvm-pdbutil, falls auf dem Windows-System verfügbar. Der Symbolcache bleibt lokal im Serverordner." Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="10,0"/>
+                    </StackPanel>
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding PdbStatuses}" Margin="0,8" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="PDB" Binding="{Binding Name}" Width="180"/>
+                            <DataGridCheckBoxColumn Header="Vorhanden" Binding="{Binding Exists}" Width="80"/>
+                            <DataGridCheckBoxColumn Header="Indexiert" Binding="{Binding Indexed}" Width="80"/>
+                            <DataGridTextColumn Header="Details" Binding="{Binding Detail}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal">
+                        <TextBox Text="{Binding PdbSearch, UpdateSourceTrigger=PropertyChanged}" Width="420" ToolTip="Symbolname oder Teilstring eingeben. Enter startet die Suche.">
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Enter" Command="{Binding SearchPdbCommand}"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        <Button Content="Symbole suchen" Command="{Binding SearchPdbCommand}"/>
+                        <TextBlock Text="z.B. CParserZone, GUILDWARSTATUS, WorldManagerSession" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="8,0"/>
+                    </StackPanel>
+                    <TextBox Grid.Row="3" Text="{Binding PdbOutput, Mode=OneWay}" FontFamily="Consolas" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Margin="0,8,0,0"/>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Limits / Capacity">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="0.9*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="1.25*"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="NA2016 Limit- und Map-Audit" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding CapacitySummary}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                                <TextBlock Text="SHBD X ist Bytes pro Zeile; 1 Byte = 8 Kollisionszellen. Die Server-Blockfläche wird aus der in Zone.exe bestätigten Umrechnung berechnet. Field.txt und SHBD sind getrennte Ebenen." Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Limits/Maps neu analysieren" Command="{Binding AnalyzeCapacityCommand}" Padding="14,7" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding CapacityLimits}" AlternationCount="2" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="100"/>
+                            <DataGridTextColumn Header="Kategorie" Binding="{Binding Category}" Width="115"/>
+                            <DataGridTextColumn Header="Limit" Binding="{Binding Name}" Width="155"/>
+                            <DataGridTextColumn Header="Hard Limit" Binding="{Binding LimitText}" Width="95"/>
+                            <DataGridTextColumn Header="Objektgröße" Binding="{Binding ObjectSizeText}" Width="100"/>
+                            <DataGridTextColumn Header="Pool ~RAM" Binding="{Binding PoolMemoryText}" Width="95"/>
+                            <DataGridTextColumn Header="Binäre Evidenz" Binding="{Binding Evidence}" Width="260"/>
+                            <DataGridTextColumn Header="Einordnung" Binding="{Binding Notes}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock Grid.Row="2" Text="Karten / BlockInfo" FontSize="16" FontWeight="SemiBold" Margin="0,10,0,5"/>
+                    <DataGrid Grid.Row="3" ItemsSource="{Binding MapCapacities}" AlternationCount="2" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="MapID" Binding="{Binding MapId}" Width="125"/>
+                            <DataGridTextColumn Header="Name" Binding="{Binding MapName}" Width="180"/>
+                            <DataGridTextColumn Header="Zone" Binding="{Binding Zones}" Width="70"/>
+                            <DataGridTextColumn Header="Field x/y" Binding="{Binding FieldSizeText}" Width="105"/>
+                            <DataGridTextColumn Header="Field ~Welt" Binding="{Binding FieldWorldSizeText}" Width="135"/>
+                            <DataGridTextColumn Header="SHBD Header" Binding="{Binding ShbdHeaderText}" Width="110"/>
+                            <DataGridTextColumn Header="Kollisionsgrid" Binding="{Binding CollisionGridText}" Width="135"/>
+                            <DataGridTextColumn Header="Server-Blockfläche" Binding="{Binding ServerBlockWorldSizeText}" Width="150"/>
+                            <DataGridTextColumn Header="SHBD" Binding="{Binding FileSizeText}" Width="85"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Client / Map Safety">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="NA2016 Client-/Terrain-Sicherheitsanalyse" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding ClientTerrainSummary}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                                <TextBlock Text="Wichtig: Terrainformat, SHBD/BlockInfo und Gameplay-/Netzwerkkoordinaten sind verschiedene Ebenen. 'Darstellbar' bedeutet nicht automatisch 'stock-sicher'." Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="Fiesta.bin auswählen" Command="{Binding BrowseClientBinaryCommand}" Padding="12,7"/>
+                                <Button Content="Client neu analysieren" Command="{Binding AnalyzeClientTerrainCommand}" Padding="12,7" Margin="6,0,0,0"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="125"/><ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="115"/><ColumnDefinition Width="180"/>
+                                <ColumnDefinition Width="115"/><ColumnDefinition Width="180"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Client" Foreground="{StaticResource Muted}"/>
+                            <TextBlock Grid.Column="1" Text="{Binding ClientTerrainInfo.BinaryName}"/>
+                            <TextBlock Grid.Column="2" Text="PE" Foreground="{StaticResource Muted}"/>
+                            <TextBlock Grid.Column="3" Text="{Binding ClientTerrainInfo.PeKind}"/>
+                            <TextBlock Grid.Column="4" Text="LargeAddressAware" Foreground="{StaticResource Muted}"/>
+                            <TextBlock Grid.Column="5" Text="{Binding ClientTerrainInfo.LaaText}"/>
+
+                            <TextBlock Grid.Row="1" Text="Pfad" Foreground="{StaticResource Muted}" Margin="0,4,0,0"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="5" Text="{Binding ClientTerrainInfo.ClientBinaryPath}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+
+                            <TextBlock Grid.Row="2" Text="SHA-256" Foreground="{StaticResource Muted}" Margin="0,4,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ClientTerrainInfo.HashShort}" Margin="0,4,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="2" Text="Baseline" Foreground="{StaticResource Muted}" Margin="0,4,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding ClientTerrainInfo.BaselineText}" Margin="0,4,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="4" Text="Terrain-Signaturen" Foreground="{StaticResource Muted}" Margin="0,4,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="5" Text="{Binding ClientTerrainInfo.SignatureText}" Margin="0,4,0,0"/>
+
+                            <TextBlock Grid.Row="3" Text="Binary-Evidenz" Foreground="{StaticResource Muted}" Margin="0,5,0,0"/>
+                            <StackPanel Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="5" Margin="0,5,0,0">
+                                <TextBlock Text="{Binding ClientTerrainInfo.StaticLoaderEvidence}" TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding ClientTerrainInfo.CompatibilityAssessment}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="0.85*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="1.15*"/>
+                        </Grid.RowDefinitions>
+                        <DataGrid ItemsSource="{Binding ClientTerrainProfiles}" AlternationCount="2" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Terrain-Quads" Binding="{Binding TerrainText}" Width="105"/>
+                                <DataGridTextColumn Header="Heightmap-Punkte" Binding="{Binding HeightMapText}" Width="125"/>
+                                <DataGridTextColumn Header="Weltseite @50" Binding="{Binding WorldText}" Width="145"/>
+                                <DataGridTextColumn Header="Chunks @64" Binding="{Binding ChunkCount}" Width="85"/>
+                                <DataGridTextColumn Header="3 Height-Puffer" Binding="{Binding RawHeightMemoryText}" Width="105"/>
+                                <DataGridTextColumn Header="HTD ~" Binding="{Binding HtdSizeText}" Width="85"/>
+                                <DataGridTextColumn Header="SHBD ~" Binding="{Binding ShbdSizeText}" Width="85"/>
+                                <DataGridTextColumn Header="Collision" Binding="{Binding CollisionText}" Width="125"/>
+                                <DataGridTextColumn Header="≤ signed16" Binding="{Binding Signed16Text}" Width="85"/>
+                                <DataGridTextColumn Header="Risiko" Binding="{Binding Risk}" Width="95"/>
+                                <DataGridTextColumn Header="Einordnung" Binding="{Binding Recommendation}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <TextBlock Grid.Row="1" Text="Tatsächlich erkannte Client-HeightMaps (resmap/**/*.ini)" FontSize="15" FontWeight="SemiBold" Margin="0,8,0,5"/>
+                        <DataGrid Grid.Row="2" ItemsSource="{Binding ClientTerrainMaps}" AlternationCount="2" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Map" Binding="{Binding MapName}" Width="130"/>
+                                <DataGridTextColumn Header="Height-Punkte" Binding="{Binding PointsText}" Width="115"/>
+                                <DataGridTextColumn Header="Terrain-Quads" Binding="{Binding QuadsText}" Width="110"/>
+                                <DataGridTextColumn Header="Block W/H" Binding="{Binding BlockText}" Width="95"/>
+                                <DataGridTextColumn Header="Weltgröße" Binding="{Binding WorldText}" Width="135"/>
+                                <DataGridTextColumn Header="Chunks" Binding="{Binding ChunkText}" Width="95"/>
+                                <DataGridTextColumn Header="Risiko" Binding="{Binding Risk}" Width="90"/>
+                                <DataGridTextColumn Header="Einordnung" Binding="{Binding Notes}" Width="220"/>
+                                <DataGridTextColumn Header="Pfad" Binding="{Binding RelativePath}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Einstellungen / Hinweise">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="16" MaxWidth="900" HorizontalAlignment="Left">
+                        <TextBlock Text="Sicherheitsmodell" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,15">Start/Stop/Restart, Service-Recovery, Reinstall und Dienst-Löschen benötigen Administratorrechte. „Dienst löschen“ löscht nur den Windows-Service, nicht die Zone-Dateien. Auto-Reparaturen an Konfigurationsdateien legen vorher ein Backup unter .nextgen-backups an.</TextBlock>
+                        <TextBlock Text="Smart Start" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,15">Core-Dienste werden in definierter Reihenfolge gestartet. Danach wartet der Manager auf den WorldManager-Zone-Listener (NA2016 typischerweise 9014), startet Zonen nacheinander und validiert jeweils den Client-Port. Stirbt eine Zone während des ersten Starts, erfolgt genau ein Recovery-Versuch.</TextBlock>
+                        <TextBlock Text="Diagnose" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,15">Der Analyzer kombiniert ServerInfo/ZoneServerInfo-Audits, Servicezustand, Portzustand und bekannte NA2016-Logmuster. PDB-Indexierung ist optional und erweitert die Symbolsuche, verändert aber keine Binaries.</TextBlock>
+                        <TextBlock Text="Live Diagnostics / Scaling" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,15">Live-Log-Tails kombinieren FileSystemWatcher mit Polling-Fallback. Zusätzlich misst der Manager pro Zone etablierte Client-Sessions, Core-bezogene CPU-Last, Privat-/Working-Set-RAM und konfigurierte Maps. Ab 70/85/95 % entstehen Frühwarnung/Ausbau/Kritisch. Die 3072-MB-RAM-Schwelle ist ein konservatives Betriebsbudget und kein behauptetes Binary-Hardlimit.</TextBlock>
+                        <TextBlock Text="Neue Zone / Firewall" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,15">Die Provisionierung sichert ServerInfo.txt, klont eine vorhandene Zone ohne Logs, schreibt Zone-ID und drei freie Ports, registriert den Windows-Dienst und legt ausschließlich für den Client-Port eine eingehende Windows-Firewallregel an. Interner Zone-Port und OPTool-Port werden absichtlich nicht extern freigegeben. Maps werden nicht automatisch verschoben und die neue Zone wird nicht automatisch gestartet.</TextBlock>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+
+        <Border Grid.Row="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="7" Margin="0,10,0,0">
+            <TextBlock Text="{Binding StatusLine}" Foreground="{StaticResource Muted}"/>
+        </Border>
+    </Grid>
+</Window>

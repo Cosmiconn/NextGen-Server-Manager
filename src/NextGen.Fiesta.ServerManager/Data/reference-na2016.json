@@ -1,0 +1,53 @@
+{
+  "name": "FiestaHeroes NA2016 reference supplied by user / current baseline",
+  "files": {
+    "Account/Account.exe": {
+      "sha256": "0d421d1a338d9f23886b97f2313489aea2723a636b9e8ffeb143fc3c59e9aaa9",
+      "size": 309248
+    },
+    "Account/Account.pdb": {
+      "sha256": "d3d1ac84fa7b1cf0bcec52d971ece39e264e84d6aab036878106045f9ec47ff4",
+      "size": 4492288
+    },
+    "AccountLog/AccountLog.exe": {
+      "sha256": "b01f455cf566fab9e889e51b6fa8b81ee78440db95b4aac54e4b2ff139f278d0",
+      "size": 285696
+    },
+    "AccountLog/AccountLog.pdb": {
+      "sha256": "1ffe59a7d930dc4db15f2f56d5f4c6626fd0913142894ab0f702b945867ec0ed",
+      "size": 4410368
+    },
+    "Login/Login.exe": {
+      "sha256": "15132fe91f76b61beff877f0a80725a909fab4923cd9c7e9da76fe87fe1ccf99",
+      "size": 205824
+    },
+    "Login/Login.pdb": {
+      "sha256": "e58dfb87c384a86a0018373978a6b37b091bbbf546429e253a4b1376bb771259",
+      "size": 3320832
+    },
+    "Character/Character.exe": {
+      "sha256": "2889640536a271468ef17cc6c74bd6f8799222e3bd95b81d53ea59d41c5a9e1c",
+      "size": 927744
+    },
+    "GameLog/GameLog.exe": {
+      "sha256": "6e855b2330577065935f0cc2326d14a0b126c4d3de4880a0aed6c03db8eeb7c6",
+      "size": 310784
+    },
+    "WorldManager/WorldManager.exe": {
+      "sha256": "23e94c78840a80f874adffa15792ae29f5d25df950418b3633f6e5f5ba68ede1",
+      "size": 630272
+    },
+    "WorldManager/WorldManager.pdb": {
+      "sha256": "ed7bd958db6853ac1b77c6bdb31b0afdf169592ddef13a286aadd5003ba7689c",
+      "size": 6269952
+    },
+    "Zone00/Zone.exe": {
+      "sha256": "db1cb42912556a4ea5cde5c18f15f2495b81465c70ca9c18ad5bc7e36611aff5",
+      "size": 4673536
+    },
+    "Zone00/Zone.pdb": {
+      "sha256": "569a9d3ee6c4478b8e96d176f15ce64a9aab3f42e52d29d17c3c4d5af8f9ec6c",
+      "size": 25594880
+    }
+  }
+}

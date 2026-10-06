@@ -1,0 +1,202 @@
+[
+  {
+    "code": "NG-PROTO-0002",
+    "severity": "Warning",
+    "pattern": "FAILED - ZONE Parser's unknown",
+    "regex": false,
+    "title": "Bekanntes/unerwartetes Zone-Paket am WorldManager",
+    "description": "Der WorldManager hat auf einer Zone-Verbindung ein Paket nicht dem aktiven Parserzustand zuordnen können.",
+    "recommendation": "Absender-Zone, Sessionstatus und unmittelbar vorherige Connect/Validation-Zeilen prüfen. Bei reinem Startup-Ereignis Smart Start verwenden und beobachten, ob es im laufenden Betrieb wiederkehrt.",
+    "repairAction": "SmartStart"
+  },
+  {
+    "code": "NG-WM-0002",
+    "severity": "Warning",
+    "pattern": "SERVER_ID_UNKNOWN",
+    "regex": false,
+    "title": "Nicht klassifizierte Server-Session",
+    "description": "Eine S2S-Verbindung wurde beendet, bevor/ohne dass sie sauber als Fiesta-Servertyp klassifiziert war.",
+    "recommendation": "Startup-Reihenfolge, Reconnects und S2S-Handshake prüfen. Wiederholt sich dies nach vollständigem Start, betroffene Zone über Port/PID identifizieren.",
+    "repairAction": "SmartStart"
+  },
+  {
+    "code": "NG-PROTO-0003",
+    "severity": "Error",
+    "pattern": "Packet Too Long",
+    "regex": false,
+    "title": "Paketlänge überschritten",
+    "description": "Ein Fiesta-Protokollhandler meldet ein Paket, das größer als die erwartete Struktur ist.",
+    "recommendation": "Client/Server-Build, Opcode/Struct-Version und eventuelle DLL-Hooks prüfen. Wiederholte Meldungen sind nicht als normales Startup-Rauschen zu behandeln.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-CORE-0001",
+    "severity": "Critical",
+    "pattern": "FATAL ERROR",
+    "regex": false,
+    "title": "Fataler Serverfehler",
+    "description": "Ein NA2016-Dienst meldet einen fatalen Fehler.",
+    "recommendation": "Die Zeilen direkt davor und danach sichern. Dienst nicht blind in einer Schleife starten; Konfiguration, DB-Verbindung und referenzierte Daten prüfen.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-CORE-0002",
+    "severity": "Critical",
+    "pattern": "ASSERT",
+    "regex": false,
+    "title": "Assertion ausgelöst",
+    "description": "Eine interne Annahme der Serverbinary wurde verletzt.",
+    "recommendation": "Dbg/Message-Log und ggf. Crashdump/PDB gemeinsam auswerten. Betroffene SHN/Map/Runtime-Daten gezielt prüfen.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-DATA-0001",
+    "severity": "Critical",
+    "pattern": "Duplicate serial",
+    "regex": false,
+    "title": "Doppelte Field-Serial",
+    "description": "Field/Map-Daten enthalten eine doppelte Serialnummer.",
+    "recommendation": "Field.txt und zugehörige Map-/BlockInfo-Daten auf eindeutige Serial/Checksum-Werte prüfen und vor Änderung sichern.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-ZONE-0014",
+    "severity": "Error",
+    "pattern": "too many block info",
+    "regex": false,
+    "title": "BlockInfo-Limit erreicht",
+    "description": "Die Zone kann weitere BlockInfo-Daten nicht aufnehmen.",
+    "recommendation": "Maplast auf zusätzliche ZoneServer verteilen und Field-Zuordnung überprüfen.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-ZONE-0015",
+    "severity": "Error",
+    "pattern": "too many mob",
+    "regex": false,
+    "title": "Mob-Limit erreicht",
+    "description": "Die Zone erreicht ein internes Mob-/Spawn-Limit.",
+    "recommendation": "Mob-/Maplast auf mehrere Zonen verteilen; Spawnkonfiguration auf Duplikate prüfen.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-NET-0004",
+    "severity": "Info",
+    "pattern": "<RECONNECT",
+    "regex": false,
+    "title": "S2S-Reconnect",
+    "description": "Ein Serverdienst versucht eine interne Fiesta-Verbindung erneut aufzubauen.",
+    "recommendation": "Einzelne Reconnects beim Start sind erwartbar. Wiederholte Reconnects im laufenden Betrieb auf Netzwerk, Portbelegung und Zielservice prüfen.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-ZONE-0018",
+    "severity": "Error",
+    "pattern": "NO ZONE SESSION BUFFER",
+    "regex": false,
+    "title": "Kein Zone-Session-Puffer verfügbar",
+    "description": "Der WorldManager konnte keine freie/geeignete Zone-Session bereitstellen.",
+    "recommendation": "Doppelte/halb offene Zone-Verbindungen, Startup-Race oder fehlerhafte Registrierungen prüfen. Smart Restart verwenden und danach erneut analysieren.",
+    "repairAction": "SmartStart"
+  },
+  {
+    "code": "NG-WM-0003",
+    "severity": "Error",
+    "pattern": "ZONE Send_NC_MISC_S2SCONNECTION_RDY",
+    "regex": false,
+    "title": "Zone S2S Ready fehlgeschlagen",
+    "description": "WorldManager konnte die S2S-Ready-Nachricht an eine Zone nicht korrekt senden.",
+    "recommendation": "Zone-Servicezustand, Registrierungsreihenfolge und WM-Zone-Port prüfen. Bei Startup-Effekt Smart Start einsetzen.",
+    "repairAction": "SmartStart"
+  },
+  {
+    "code": "NG-ZONE-0008",
+    "severity": "Error",
+    "pattern": "CONNECTING WORLDMANAGER",
+    "regex": false,
+    "title": "Zone baut WorldManager-Verbindung wiederholt auf",
+    "description": "Eine Zone versucht den WorldManager erneut zu erreichen. In der Startphase ist ein einzelner Versuch normal; wiederholte Vorkommen werden zusätzlich vom Live-Korrelator bewertet.",
+    "recommendation": "WM-Status, internen WM-Port, ServerInfo und Startreihenfolge prüfen. Smart Start verwenden.",
+    "repairAction": "SmartStart"
+  },
+  {
+    "code": "NG-ZONE-0010",
+    "severity": "Error",
+    "pattern": "machine number[-1]",
+    "regex": false,
+    "title": "Ungültige Ziel-Zone / Machine Number",
+    "description": "Die Zielzone konnte für einen Transfer oder Link nicht aufgelöst werden.",
+    "recommendation": "Field/InstanceDungeon-Zuordnung, ZoneNumber/Piesta und registrierte Zone-Services miteinander vergleichen.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-DATA-0002",
+    "severity": "Error",
+    "pattern": "checksum",
+    "regex": false,
+    "title": "Checksum-Hinweis in Serverdaten",
+    "description": "Ein Serverlog enthält einen Checksum-Hinweis. Das kann auf nicht zusammenpassende Field-/Map-/SHN-Daten deuten.",
+    "recommendation": "Die unmittelbar betroffene Datei aus dem Log ermitteln und mit einem funktionierenden Referenzstand vergleichen.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-NET-0005",
+    "severity": "Error",
+    "pattern": "CONNECT FAILED",
+    "regex": false,
+    "title": "Interne Verbindung fehlgeschlagen",
+    "description": "Ein Serverdienst konnte eine interne TCP-Verbindung nicht herstellen.",
+    "recommendation": "Zielservice, Portbelegung, Firewall und ServerInfo-Adresse prüfen. Port-PID-Spalte im Dashboard kontrollieren.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-ZONE-0019",
+    "severity": "Warning",
+    "pattern": "Closed ZN from",
+    "regex": false,
+    "title": "WorldManager hat eine Zone-Session geschlossen",
+    "description": "Eine WorldManager↔Zone-Session wurde geschlossen. Beim Booten kann das ein Reconnect-Race sein; im laufenden Betrieb ist es auffällig.",
+    "recommendation": "Zeitpunkt mit SERVER_ID_UNKNOWN, Parserfehlern und Runtime-Timeline korrelieren.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-CORE-0003",
+    "severity": "Critical",
+    "pattern": "Unhandled Exception",
+    "regex": false,
+    "title": "Unbehandelte Ausnahme",
+    "description": "Ein Dienst meldet eine unbehandelte Ausnahme.",
+    "recommendation": "Windows Event Log, Fault-Adresse und passende PDB gemeinsam auswerten. Vor Neustart die letzten Logzeilen sichern.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-ZONE-0020",
+    "severity": "Error",
+    "pattern": "Too many npc",
+    "regex": false,
+    "title": "NPC-Pool erreicht",
+    "description": "Die Zone meldet, dass keine weiteren NPC-Objekte aufgenommen werden können.",
+    "recommendation": "NPC-/Maplast prüfen und Maps auf zusätzliche Zonen verteilen. Der verifizierte ShineNPC-Pool beträgt 256 pro Zone-Prozess.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-ZONE-0021",
+    "severity": "Error",
+    "pattern": "Too many mapcluster",
+    "regex": false,
+    "title": "MapCluster-Limit erreicht",
+    "description": "Der MapCluster-Container der Zone ist ausgeschöpft.",
+    "recommendation": "Mapzuordnung auf zusätzliche ZoneServer verteilen. Verifiziertes Registry-Limit: 512.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-ZONE-0022",
+    "severity": "Error",
+    "pattern": "Too many BlockDistribute",
+    "regex": false,
+    "title": "BlockDistribute-Limit erreicht",
+    "description": "Der BlockDistribute-Manager hat keinen freien Eintrag mehr.",
+    "recommendation": "Map-/BlockInfo-Verteilung prüfen und Last auf weitere Zonen verteilen. Verifizierter Containerwert: 64.",
+    "repairAction": "None"
+  }
+]
