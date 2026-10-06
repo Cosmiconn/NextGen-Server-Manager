@@ -29,25 +29,25 @@ public sealed class FiestaLoadRampCoordinator
 
         var finalTarget = targets[^1];
         if (finalTarget > ZonePoolOfflineWriterSelfTest.PlayerTarget)
-            return FiestaLoadRampResult.Blocked(
+            return FiestaLoadRampResult.CreateBlocked(
                 $"Ziel {finalTarget:N0} überschreitet den zertifizierten ShinePlayer-Pool {ZonePoolOfflineWriterSelfTest.PlayerTarget:N0}.");
 
         if (credentials.Clients.Count < finalTarget)
-            return FiestaLoadRampResult.Blocked(
+            return FiestaLoadRampResult.CreateBlocked(
                 $"Credential-Manifest enthält nur {credentials.Clients.Count:N0} eindeutige Clients; benötigt werden {finalTarget:N0}.");
 
         var baseline = _runtimeObserver.Observe(options.TargetZoneExePath, minimumUptimeSeconds: 0);
         if (!baseline.Passed || baseline.Pools is null)
-            return FiestaLoadRampResult.Blocked(
+            return FiestaLoadRampResult.CreateBlocked(
                 "Runtime-Baseline ist nicht zertifiziert bereit: " + baseline.Detail);
 
         if (baseline.Pools.PlayerLimit != ZonePoolOfflineWriterSelfTest.PlayerTarget)
-            return FiestaLoadRampResult.Blocked(
+            return FiestaLoadRampResult.CreateBlocked(
                 $"Runtime ShinePlayer-Limit ist {baseline.Pools.PlayerLimit:N0} statt {ZonePoolOfflineWriterSelfTest.PlayerTarget:N0}.");
 
         var baselinePlayers = baseline.Pools.PlayerCount;
         if (options.RequireEmptyBaseline && baselinePlayers != 0)
-            return FiestaLoadRampResult.Blocked(
+            return FiestaLoadRampResult.CreateBlocked(
                 $"Für den isolierten Lasttest muss die Zone leer sein; aktuell {baselinePlayers:N0} Player.");
 
         var ready = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
@@ -466,7 +466,7 @@ public sealed class FiestaLoadRampResult
     public IReadOnlyList<FiestaLoadRampStageResult> StageResults { get; init; } = Array.Empty<FiestaLoadRampStageResult>();
     public string Detail { get; init; } = string.Empty;
 
-    public static FiestaLoadRampResult Blocked(string detail)
+    public static FiestaLoadRampResult CreateBlocked(string detail)
         => new() { Blocked = true, Status = "BLOCKED", Detail = "LOAD RAMP BLOCKED · " + detail };
 }
 
