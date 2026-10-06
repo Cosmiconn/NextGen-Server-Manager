@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace NextGen.Fiesta.ServerManager;
@@ -126,7 +127,7 @@ public partial class MainWindow
             Margin = new Thickness(3)
         };
         logFiles.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("LogFiles"));
-        logFiles.SetBinding(Selector.SelectedItemProperty, new Binding("SelectedLogPath") { Mode = BindingMode.TwoWay });
+        logFiles.SetBinding(ComboBox.SelectedItemProperty, new Binding("SelectedLogPath") { Mode = BindingMode.TwoWay });
         controls.Children.Add(logFiles);
         controls.Children.Add(CreateDiagnosticCommandButton("\uE72C", "Log neu laden", "ReloadLogCommand"));
         controls.Children.Add(CreateDiagnosticCommandButton("\uE768", "Live Start", "StartLiveCommand", true));
@@ -449,7 +450,9 @@ public partial class MainWindow
             VerticalContentAlignment = VerticalAlignment.Center
         };
         query.SetBinding(TextBox.TextProperty, new Binding("PdbSearch") { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
-        query.InputBindings.Add(new KeyBinding { Key = Key.Enter, Command = (System.Windows.Input.ICommand)FindResource("ApplicationCommands.NotACommand") });
+        var enterBinding = new KeyBinding { Key = Key.Enter };
+        enterBinding.SetBinding(InputBinding.CommandProperty, new Binding("SearchPdbCommand"));
+        query.InputBindings.Add(enterBinding);
         controls.Children.Add(query);
 
         var search = CreateDiagnosticCommandButton("\uE721", "Symbole suchen", "SearchPdbCommand", true);
