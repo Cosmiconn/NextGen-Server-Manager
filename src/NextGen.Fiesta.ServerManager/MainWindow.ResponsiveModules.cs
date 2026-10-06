@@ -46,8 +46,10 @@ public partial class MainWindow
 
     private static void ApplyDashboardResponsiveLayout(MainWindow window, double width)
     {
-        if (window._mainNavigation?.Items.Count < 1 ||
-            window._mainNavigation.Items[0] is not TabItem dashboard ||
+        var mainNavigation = window._mainNavigation;
+        if (mainNavigation is null ||
+            mainNavigation.Items.Count < 1 ||
+            mainNavigation.Items[0] is not TabItem dashboard ||
             dashboard.Content is not Grid root)
             return;
 
@@ -100,8 +102,10 @@ public partial class MainWindow
 
     private static void ApplyLogsResponsiveLayout(MainWindow window, double width)
     {
-        if (window._mainNavigation?.Items.Count < 3 ||
-            window._mainNavigation.Items[2] is not TabItem diagnostic ||
+        var mainNavigation = window._mainNavigation;
+        if (mainNavigation is null ||
+            mainNavigation.Items.Count < 3 ||
+            mainNavigation.Items[2] is not TabItem diagnostic ||
             diagnostic.Content is not TabControl diagnosticSub ||
             diagnosticSub.Items.Count < 1 ||
             diagnosticSub.Items[0] is not TabItem logs ||
