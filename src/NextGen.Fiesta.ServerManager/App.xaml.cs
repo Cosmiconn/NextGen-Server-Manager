@@ -64,6 +64,11 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(protocolSelfTest.Detail);
             Log("HEADLESS_PROTOCOL_SELFTEST PASS · " + protocolSelfTest.Detail);
 
+            var captureSelfTest = FiestaZoneTransferCaptureImporter.RunSelfTest();
+            if (!captureSelfTest.Success)
+                throw new InvalidOperationException(captureSelfTest.Detail);
+            Log("ZONE_TRANSFER_CAPTURE_SELFTEST PASS · " + captureSelfTest.Detail);
+
             var originalWidth = window.Width;
             var originalHeight = window.Height;
             var targets = new (double Width, double Height)[]
