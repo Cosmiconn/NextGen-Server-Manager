@@ -35,11 +35,63 @@ public partial class App : System.Windows.Application
             MainWindow = window;
             window.Show();
             Log("MainWindow successfully shown.");
+
+            // CI can opt into a real dispatcher-driven resize smoke without changing
+            // normal production startup. This exercises the SizeChanged breakpoints,
+            // visual-tree transformations and narrow layouts that a compile cannot test.
+            if (string.Equals(
+                    Environment.GetEnvironmentVariable("NEXTGEN_UI_SMOKE_RESIZE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                _ = RunUiResizeSmokeAsync(window);
+            }
         }
         catch (Exception ex)
         {
             ReportFatal("STARTUP", ex);
             Shutdown(-1);
+        }
+    }
+
+    private static async Task RunUiResizeSmokeAsync(MainWindow window)
+    {
+        try
+        {
+            var originalWidth = window.Width;
+            var originalHeight = window.Height;
+            var targets = new (double Width, double Height)[]
+            {
+                (1180, 760),
+                (900, 700),
+                (720, 620),
+                (1280, 800)
+            };
+
+            foreach (var target in targets)
+            {
+                window.WindowState = WindowState.Normal;
+                window.Width = Math.Max(window.MinWidth, target.Width);
+                window.Height = Math.Max(window.MinHeight, target.Height);
+
+                // Give WPF rendering, SizeChanged handlers and queued responsive passes
+                // enough dispatcher turns to settle before the next breakpoint.
+                await Task.Delay(450);
+                Log(
+                    $"UI_SMOKE_RESIZE target={target.Width:F0}x{target.Height:F0} " +
+                    $"actual={window.ActualWidth:F0}x{window.ActualHeight:F0} " +
+                    $"min={window.MinWidth:F0}x{window.MinHeight:F0}");
+            }
+
+            window.Width = Math.Max(window.MinWidth, originalWidth);
+            window.Height = Math.Max(window.MinHeight, originalHeight);
+            await Task.Delay(450);
+            Log("UI_SMOKE_RESIZE completed.");
+        }
+        catch (Exception ex)
+        {
+            ReportFatal("UI_SMOKE_RESIZE", ex);
+            Current.Shutdown(-3);
         }
     }
 
