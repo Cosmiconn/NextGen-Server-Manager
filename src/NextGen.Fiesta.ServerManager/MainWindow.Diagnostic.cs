@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using NextGen.Fiesta.ServerManager.ViewModels;
 
 namespace NextGen.Fiesta.ServerManager;
 
@@ -24,24 +25,17 @@ public partial class MainWindow
     private static void OnDiagnosticWindowLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not MainWindow window || TargetDiagnostics.TryGetValue(window, out _))
-        {
             return;
-        }
 
-        if (window._mainNavigation?.Items.Count < 3 ||
-            window._mainNavigation.Items[2] is not TabItem diagnosticTab ||
+        var mainNavigation = window._mainNavigation;
+        if (mainNavigation is null || mainNavigation.Items.Count < 3 ||
+            mainNavigation.Items[2] is not TabItem diagnosticTab ||
             diagnosticTab.Content is not TabControl diagnosticNavigation ||
-            diagnosticNavigation.Items.Count < 3)
-        {
-            return;
-        }
-
-        if (diagnosticNavigation.Items[0] is not TabItem logs ||
+            diagnosticNavigation.Items.Count < 3 ||
+            diagnosticNavigation.Items[0] is not TabItem logs ||
             diagnosticNavigation.Items[1] is not TabItem timeline ||
             diagnosticNavigation.Items[2] is not TabItem pdb)
-        {
             return;
-        }
 
         TargetDiagnostics.Add(window, new object());
         window.BuildLogsDiagnosticTargetView(logs);
@@ -54,26 +48,22 @@ public partial class MainWindow
         var root = new Grid { Margin = new Thickness(0, 10, 0, 0) };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
-        var header = CreateDiagnosticHeader(
-            "\uE8A5",
-            "Logs & Diagnose",
+        root.Children.Add(CreateDiagnosticHeader(
+            "\uE8A5", "Logs & Diagnose",
             "Rekursive Service-Logs, Vollanalyse, Reparaturhinweise und Live-Monitoring",
             ("\uE9D9", "Vollanalyse", "AnalyzeCommand", true),
-            ("\uE74D", "Bericht exportieren", "ExportReportCommand", false));
-        root.Children.Add(header);
+            ("\uE74D", "Bericht exportieren", "ExportReportCommand", false)));
 
         var body = new Grid();
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.84, GridUnitType.Star), MinWidth = 360 });
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.16, GridUnitType.Star), MinWidth = 470 });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.84, GridUnitType.Star), MinWidth = 330 });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.16, GridUnitType.Star), MinWidth = 420 });
         Grid.SetRow(body, 1);
 
         var left = new Grid { Margin = new Thickness(0, 0, 8, 0) };
         left.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1.25, GridUnitType.Star) });
         left.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0.75, GridUnitType.Star) });
-        var logCard = CreateLogViewerCard();
-        left.Children.Add(logCard);
-        var activity = CreateActivityCard();
+        left.Children.Add(CreateLogViewerCard());
+        var activity = CreateTextLogCard("Aktivitäts-/Smart-Start-Protokoll", "ActivityText", 10);
         Grid.SetRow(activity, 1);
         left.Children.Add(activity);
         body.Children.Add(left);
@@ -82,18 +72,12 @@ public partial class MainWindow
         Grid.SetColumn(diagnosis, 1);
         body.Children.Add(diagnosis);
         root.Children.Add(body);
-
         tab.Content = root;
     }
 
     private Border CreateLogViewerCard()
     {
-        var border = new Border
-        {
-            Style = (Style)FindResource("CardBorder"),
-            Padding = new Thickness(0),
-            Margin = new Thickness(0, 0, 0, 8)
-        };
+        var border = CreateDiagnosticCard();
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -102,110 +86,37 @@ public partial class MainWindow
         var heading = new Grid { Margin = new Thickness(12, 9, 12, 5) };
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        heading.Children.Add(new TextBlock
-        {
-            Text = "Live-/Dateilog",
-            FontSize = 15,
-            FontWeight = FontWeights.SemiBold
-        });
-        var inventory = new TextBlock
-        {
-            Foreground = (Brush)FindResource("Muted"),
-            FontSize = 10,
-            VerticalAlignment = VerticalAlignment.Center
-        };
+        heading.Children.Add(new TextBlock { Text = "Live-/Dateilog", FontSize = 15, FontWeight = FontWeights.SemiBold });
+        var inventory = new TextBlock { Foreground = (Brush)FindResource("Muted"), FontSize = 10, VerticalAlignment = VerticalAlignment.Center };
         inventory.SetBinding(TextBlock.TextProperty, new Binding("LogInventoryText"));
         Grid.SetColumn(inventory, 1);
         heading.Children.Add(inventory);
         root.Children.Add(heading);
 
         var controls = new WrapPanel { Margin = new Thickness(9, 0, 9, 7) };
-        var logFiles = new ComboBox
-        {
-            MinWidth = 260,
-            Width = 320,
-            Margin = new Thickness(3)
-        };
-        logFiles.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("LogFiles"));
-        logFiles.SetBinding(ComboBox.SelectedItemProperty, new Binding("SelectedLogPath") { Mode = BindingMode.TwoWay });
-        controls.Children.Add(logFiles);
+        var logs = new ComboBox { MinWidth = 250, Width = 310, Margin = new Thickness(3) };
+        logs.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("LogFiles"));
+        logs.SetBinding(ComboBox.SelectedItemProperty, new Binding("SelectedLogPath") { Mode = BindingMode.TwoWay });
+        controls.Children.Add(logs);
         controls.Children.Add(CreateDiagnosticCommandButton("\uE72C", "Log neu laden", "ReloadLogCommand"));
         controls.Children.Add(CreateDiagnosticCommandButton("\uE768", "Live Start", "StartLiveCommand", true));
         controls.Children.Add(CreateDiagnosticCommandButton("\uE71A", "Live Stop", "StopLiveCommand"));
-        var liveState = new TextBlock
-        {
-            Foreground = (Brush)FindResource("MutedStrong"),
-            FontSize = 10,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 0, 0)
-        };
-        liveState.SetBinding(TextBlock.TextProperty, new Binding("LiveStatusText"));
-        controls.Children.Add(liveState);
+        var state = new TextBlock { Foreground = (Brush)FindResource("MutedStrong"), FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+        state.SetBinding(TextBlock.TextProperty, new Binding("LiveStatusText"));
+        controls.Children.Add(state);
         Grid.SetRow(controls, 1);
         root.Children.Add(controls);
 
-        var log = new TextBox
-        {
-            FontFamily = new FontFamily("Consolas"),
-            FontSize = 11,
-            IsReadOnly = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.NoWrap,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(9, 7, 9, 7)
-        };
-        log.SetBinding(TextBox.TextProperty, new Binding("LogText") { Mode = BindingMode.OneWay });
+        var log = CreateReadOnlyLogBox("LogText", 11);
         Grid.SetRow(log, 2);
         root.Children.Add(log);
-
-        border.Child = root;
-        return border;
-    }
-
-    private Border CreateActivityCard()
-    {
-        var border = new Border
-        {
-            Style = (Style)FindResource("CardBorder"),
-            Padding = new Thickness(0)
-        };
-        var root = new Grid();
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        root.Children.Add(new TextBlock
-        {
-            Text = "Aktivitäts-/Smart-Start-Protokoll",
-            FontSize = 13,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(12, 8, 12, 6)
-        });
-        var activity = new TextBox
-        {
-            FontFamily = new FontFamily("Consolas"),
-            FontSize = 10,
-            IsReadOnly = true,
-            AcceptsReturn = true,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(9, 6, 9, 6)
-        };
-        activity.SetBinding(TextBox.TextProperty, new Binding("ActivityText") { Mode = BindingMode.OneWay });
-        Grid.SetRow(activity, 1);
-        root.Children.Add(activity);
         border.Child = root;
         return border;
     }
 
     private Border CreateDiagnosisCard()
     {
-        var border = new Border
-        {
-            Style = (Style)FindResource("CardBorder"),
-            Padding = new Thickness(0)
-        };
+        var border = CreateDiagnosticCard();
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -214,13 +125,7 @@ public partial class MainWindow
         var heading = new Grid { Margin = new Thickness(12, 8, 9, 6) };
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        heading.Children.Add(new TextBlock
-        {
-            Text = "Diagnose",
-            FontSize = 15,
-            FontWeight = FontWeights.SemiBold,
-            VerticalAlignment = VerticalAlignment.Center
-        });
+        heading.Children.Add(new TextBlock { Text = "Diagnose", FontSize = 15, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
         var actions = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
         actions.Children.Add(CreateDiagnosticCommandButton("\uE9D9", "Vollanalyse", "AnalyzeCommand", true));
         actions.Children.Add(CreateDiagnosticCommandButton("\uE73E", "Reparatur anwenden", "ApplyRepairCommand"));
@@ -229,13 +134,7 @@ public partial class MainWindow
         heading.Children.Add(actions);
         root.Children.Add(heading);
 
-        var table = new DataGrid
-        {
-            AlternationCount = 2,
-            RowHeight = 32,
-            ColumnHeaderHeight = 32,
-            BorderThickness = new Thickness(0, 1, 0, 1)
-        };
+        var table = new DataGrid { AlternationCount = 2, RowHeight = 32, ColumnHeaderHeight = 32, BorderThickness = new Thickness(0, 1, 0, 1) };
         table.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("Diagnostics"));
         table.SetBinding(DataGrid.SelectedItemProperty, new Binding("SelectedIssue") { Mode = BindingMode.TwoWay });
         ScrollViewer.SetHorizontalScrollBarVisibility(table, ScrollBarVisibility.Auto);
@@ -248,30 +147,18 @@ public partial class MainWindow
         Grid.SetRow(table, 1);
         root.Children.Add(table);
 
-        var detail = new ScrollViewer
-        {
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Padding = new Thickness(12, 8, 12, 8)
-        };
-        var detailStack = new StackPanel();
-        detailStack.Children.Add(new TextBlock
-        {
-            Text = "Auswertung / Reparaturanweisung",
-            FontSize = 12,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 5)
-        });
-        detailStack.Children.Add(CreateDiagnosticBoundText("SelectedIssue.Description", 11, (Brush)FindResource("Text")));
-        detailStack.Children.Add(CreateDiagnosticLabel("Empfehlung"));
-        detailStack.Children.Add(CreateDiagnosticBoundText("SelectedIssue.Recommendation", 10, (Brush)FindResource("MutedStrong")));
-        detailStack.Children.Add(CreateDiagnosticLabel("Beleg"));
+        var details = new StackPanel();
+        details.Children.Add(new TextBlock { Text = "Auswertung / Reparaturanweisung", FontSize = 12, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 5) });
+        details.Children.Add(CreateDiagnosticBoundText("SelectedIssue.Description", 11, (Brush)FindResource("Text")));
+        details.Children.Add(CreateDiagnosticLabel("Empfehlung"));
+        details.Children.Add(CreateDiagnosticBoundText("SelectedIssue.Recommendation", 10, (Brush)FindResource("MutedStrong")));
+        details.Children.Add(CreateDiagnosticLabel("Beleg"));
         var evidence = CreateDiagnosticBoundText("SelectedIssue.Evidence", 10, (Brush)FindResource("Muted"));
         evidence.FontFamily = new FontFamily("Consolas");
-        detailStack.Children.Add(evidence);
-        detail.Content = detailStack;
-        Grid.SetRow(detail, 2);
-        root.Children.Add(detail);
-
+        details.Children.Add(evidence);
+        var detailScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(12, 8, 12, 8), Content = details };
+        Grid.SetRow(detailScroll, 2);
+        root.Children.Add(detailScroll);
         border.Child = root;
         return border;
     }
@@ -280,22 +167,18 @@ public partial class MainWindow
     {
         var root = new Grid { Margin = new Thickness(0, 10, 0, 0) };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1.32, GridUnitType.Star) });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0.68, GridUnitType.Star) });
-
-        var header = CreateDiagnosticHeader(
-            "\uE823",
-            "Live Server Timeline",
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1.3, GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0.7, GridUnitType.Star) });
+        root.Children.Add(CreateDiagnosticHeader(
+            "\uE823", "Live Server Timeline",
             "Korrelierte Log-, Prozess-, Port- und Service-Ereignisse in zeitlicher Reihenfolge",
             ("\uE768", "Monitor starten", "StartLiveCommand", true),
             ("\uE71A", "Monitor stoppen", "StopLiveCommand", false),
-            ("\uE74D", "Bericht exportieren", "ExportReportCommand", false));
-        root.Children.Add(header);
+            ("\uE74D", "Bericht exportieren", "ExportReportCommand", false)));
 
         var live = CreateTimelineEventsCard();
         Grid.SetRow(live, 1);
         root.Children.Add(live);
-
         var transitions = CreateTimelineTransitionsCard();
         Grid.SetRow(transitions, 2);
         root.Children.Add(transitions);
@@ -304,12 +187,7 @@ public partial class MainWindow
 
     private Border CreateTimelineEventsCard()
     {
-        var border = new Border
-        {
-            Style = (Style)FindResource("CardBorder"),
-            Padding = new Thickness(0),
-            Margin = new Thickness(0, 0, 0, 8)
-        };
+        var border = CreateDiagnosticCard(new Thickness(0, 0, 0, 8));
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -319,13 +197,7 @@ public partial class MainWindow
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         heading.Children.Add(new TextBlock { Text = "Live-Ereignisse", FontSize = 14, FontWeight = FontWeights.SemiBold });
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
-        var state = new TextBlock
-        {
-            Foreground = (Brush)FindResource("MutedStrong"),
-            FontSize = 10,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
+        var state = new TextBlock { Foreground = (Brush)FindResource("MutedStrong"), FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
         state.SetBinding(TextBlock.TextProperty, new Binding("LiveStatusText"));
         actions.Children.Add(state);
         actions.Children.Add(CreateDiagnosticCommandButton("\uE74D", "Timeline leeren", "ClearLiveCommand"));
@@ -352,17 +224,11 @@ public partial class MainWindow
 
     private Border CreateTimelineTransitionsCard()
     {
-        var border = new Border { Style = (Style)FindResource("CardBorder"), Padding = new Thickness(0) };
+        var border = CreateDiagnosticCard();
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        root.Children.Add(new TextBlock
-        {
-            Text = "Service-/Prozess-Transitions",
-            FontSize = 13,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(12, 8, 12, 6)
-        });
+        root.Children.Add(new TextBlock { Text = "Service-/Prozess-Transitions", FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(12, 8, 12, 6) });
         var table = new DataGrid { AlternationCount = 2, RowHeight = 30, ColumnHeaderHeight = 31, BorderThickness = new Thickness(0, 1, 0, 0) };
         table.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("RuntimeTransitions"));
         ScrollViewer.SetHorizontalScrollBarVisibility(table, ScrollBarVisibility.Auto);
@@ -385,18 +251,14 @@ public partial class MainWindow
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0.72, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1.28, GridUnitType.Star) });
-
-        var header = CreateDiagnosticHeader(
-            "PDB",
-            "PDB / Symbole",
+        root.Children.Add(CreateDiagnosticHeader(
+            "PDB", "PDB / Symbole",
             "Lokale Symbolindexierung und Suche; Binaries werden nicht verändert",
-            ("\uE895", "PDBs indexieren", "IndexPdbCommand", true));
-        root.Children.Add(header);
+            ("\uE895", "PDBs indexieren", "IndexPdbCommand", true)));
 
         var status = CreatePdbStatusCard();
         Grid.SetRow(status, 1);
         root.Children.Add(status);
-
         var search = CreatePdbSearchCard();
         Grid.SetRow(search, 2);
         root.Children.Add(search);
@@ -405,22 +267,11 @@ public partial class MainWindow
 
     private Border CreatePdbStatusCard()
     {
-        var border = new Border
-        {
-            Style = (Style)FindResource("CardBorder"),
-            Padding = new Thickness(0),
-            Margin = new Thickness(0, 0, 0, 8)
-        };
+        var border = CreateDiagnosticCard(new Thickness(0, 0, 0, 8));
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        root.Children.Add(new TextBlock
-        {
-            Text = "Symbolindex",
-            FontSize = 14,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(12, 8, 12, 6)
-        });
+        root.Children.Add(new TextBlock { Text = "Symbolindex", FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(12, 8, 12, 6) });
         var table = new DataGrid { RowHeight = 31, ColumnHeaderHeight = 32, BorderThickness = new Thickness(0, 1, 0, 0) };
         table.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("PdbStatuses"));
         table.Columns.Add(new DataGridTextColumn { Header = "PDB", Binding = new Binding("Name"), Width = new DataGridLength(190) });
@@ -435,115 +286,62 @@ public partial class MainWindow
 
     private Border CreatePdbSearchCard()
     {
-        var border = new Border { Style = (Style)FindResource("CardBorder"), Padding = new Thickness(0) };
+        var border = CreateDiagnosticCard();
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
         var controls = new Grid { Margin = new Thickness(10, 8, 10, 7) };
-        controls.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 260 });
+        controls.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 240 });
         controls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         controls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var query = new TextBox
-        {
-            ToolTip = "Symbolname oder Teilstring eingeben",
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
+        var query = new TextBox { ToolTip = "Symbolname oder Teilstring eingeben", VerticalContentAlignment = VerticalAlignment.Center };
         query.SetBinding(TextBox.TextProperty, new Binding("PdbSearch") { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
-        var enterBinding = new KeyBinding { Key = Key.Enter };
-        enterBinding.SetBinding(InputBinding.CommandProperty, new Binding("SearchPdbCommand"));
-        query.InputBindings.Add(enterBinding);
+        query.KeyDown += (_, args) =>
+        {
+            if (args.Key != Key.Enter || DataContext is not MainViewModel vm)
+                return;
+            if (vm.SearchPdbCommand.CanExecute(null))
+                vm.SearchPdbCommand.Execute(null);
+            args.Handled = true;
+        };
         controls.Children.Add(query);
 
         var search = CreateDiagnosticCommandButton("\uE721", "Symbole suchen", "SearchPdbCommand", true);
         search.Margin = new Thickness(7, 0, 7, 0);
         Grid.SetColumn(search, 1);
         controls.Children.Add(search);
-        var hint = new TextBlock
-        {
-            Text = "z.B. CParserZone, GUILDWARSTATUS, WorldManagerSession",
-            Foreground = (Brush)FindResource("Muted"),
-            FontSize = 10,
-            VerticalAlignment = VerticalAlignment.Center
-        };
+        var hint = new TextBlock { Text = "z.B. CParserZone, GUILDWARSTATUS, WorldManagerSession", Foreground = (Brush)FindResource("Muted"), FontSize = 10, VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(hint, 2);
         controls.Children.Add(hint);
         root.Children.Add(controls);
 
-        var output = new TextBox
-        {
-            FontFamily = new FontFamily("Consolas"),
-            FontSize = 11,
-            IsReadOnly = true,
-            AcceptsReturn = true,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(9, 7, 9, 7)
-        };
-        output.SetBinding(TextBox.TextProperty, new Binding("PdbOutput") { Mode = BindingMode.OneWay });
+        var output = CreateReadOnlyLogBox("PdbOutput", 11);
         Grid.SetRow(output, 1);
         root.Children.Add(output);
         border.Child = root;
         return border;
     }
 
-    private Border CreateDiagnosticHeader(
-        string glyph,
-        string title,
-        string subtitle,
+    private Border CreateDiagnosticHeader(string glyph, string title, string subtitle,
         params (string Glyph, string Label, string Command, bool Primary)[] actions)
     {
-        var border = new Border
-        {
-            Style = (Style)FindResource("CardBorder"),
-            Margin = new Thickness(0, 0, 0, 8),
-            Padding = new Thickness(12, 9, 12, 9)
-        };
+        var border = new Border { Style = (Style)FindResource("CardBorder"), Margin = new Thickness(0, 0, 0, 8), Padding = new Thickness(12, 9, 12, 9) };
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
         var left = new StackPanel();
         var heading = new StackPanel { Orientation = Orientation.Horizontal };
-        heading.Children.Add(new TextBlock
-        {
-            Text = glyph,
-            FontFamily = glyph.Length == 1 ? new FontFamily("Segoe MDL2 Assets") : new FontFamily("Segoe UI"),
-            Foreground = (Brush)FindResource("Cyan"),
-            FontSize = glyph.Length == 1 ? 23 : 15,
-            FontWeight = FontWeights.Bold,
-            Margin = new Thickness(0, 0, 10, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        });
-        heading.Children.Add(new TextBlock
-        {
-            Text = title,
-            Style = (Style)FindResource("SectionTitle"),
-            VerticalAlignment = VerticalAlignment.Center
-        });
+        heading.Children.Add(new TextBlock { Text = glyph, FontFamily = glyph.Length == 1 ? new FontFamily("Segoe MDL2 Assets") : new FontFamily("Segoe UI"), Foreground = (Brush)FindResource("Cyan"), FontSize = glyph.Length == 1 ? 23 : 15, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center });
+        heading.Children.Add(new TextBlock { Text = title, Style = (Style)FindResource("SectionTitle"), VerticalAlignment = VerticalAlignment.Center });
         left.Children.Add(heading);
-        left.Children.Add(new TextBlock
-        {
-            Text = subtitle,
-            Foreground = (Brush)FindResource("Muted"),
-            FontSize = 10,
-            Margin = new Thickness(42, 2, 16, 0),
-            TextWrapping = TextWrapping.Wrap
-        });
+        left.Children.Add(new TextBlock { Text = subtitle, Foreground = (Brush)FindResource("Muted"), FontSize = 10, Margin = new Thickness(42, 2, 16, 0), TextWrapping = TextWrapping.Wrap });
         grid.Children.Add(left);
-
-        var actionPanel = new WrapPanel
-        {
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Center
-        };
+        var panel = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
         foreach (var action in actions)
-        {
-            actionPanel.Children.Add(CreateDiagnosticCommandButton(action.Glyph, action.Label, action.Command, action.Primary));
-        }
-        Grid.SetColumn(actionPanel, 1);
-        grid.Children.Add(actionPanel);
+            panel.Children.Add(CreateDiagnosticCommandButton(action.Glyph, action.Label, action.Command, action.Primary));
+        Grid.SetColumn(panel, 1);
+        grid.Children.Add(panel);
         border.Child = grid;
         return border;
     }
@@ -555,20 +353,56 @@ public partial class MainWindow
             Content = CreateButtonContent(glyph, label, 11),
             Style = primary ? (Style)FindResource("PrimaryActionButton") : (Style)FindResource(typeof(Button)),
             Padding = new Thickness(9, 6, 9, 6),
-            Margin = new Thickness(2)
+            Margin = new Thickness(2),
+            ToolTip = label
         };
         button.SetBinding(Button.CommandProperty, new Binding(commandPath));
         return button;
     }
 
+    private Border CreateDiagnosticCard(Thickness? margin = null)
+        => new()
+        {
+            Style = (Style)FindResource("CardBorder"),
+            Padding = new Thickness(0),
+            Margin = margin ?? new Thickness(0)
+        };
+
+    private Border CreateTextLogCard(string title, string path, double fontSize)
+    {
+        var border = CreateDiagnosticCard();
+        var root = new Grid();
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        root.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(12, 8, 12, 6) });
+        var text = CreateReadOnlyLogBox(path, fontSize);
+        Grid.SetRow(text, 1);
+        root.Children.Add(text);
+        border.Child = root;
+        return border;
+    }
+
+    private TextBox CreateReadOnlyLogBox(string path, double fontSize)
+    {
+        var box = new TextBox
+        {
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = fontSize,
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.NoWrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(9, 7, 9, 7)
+        };
+        box.SetBinding(TextBox.TextProperty, new Binding(path) { Mode = BindingMode.OneWay });
+        return box;
+    }
+
     private TextBlock CreateDiagnosticBoundText(string path, double fontSize, Brush foreground)
     {
-        var text = new TextBlock
-        {
-            FontSize = fontSize,
-            Foreground = foreground,
-            TextWrapping = TextWrapping.Wrap
-        };
+        var text = new TextBlock { FontSize = fontSize, Foreground = foreground, TextWrapping = TextWrapping.Wrap };
         text.SetBinding(TextBlock.TextProperty, new Binding(path) { TargetNullValue = "–" });
         return text;
     }
