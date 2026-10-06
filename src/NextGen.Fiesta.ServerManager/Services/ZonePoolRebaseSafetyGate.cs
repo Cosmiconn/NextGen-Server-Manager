@@ -11,6 +11,7 @@ public sealed class ZonePoolRebaseSafetyGate
     private readonly ZonePoolControlFlowAudit _controlFlow = new();
     private readonly ZonePoolFalsePositiveAudit _falsePositives = new();
     private readonly ZoneAllocatorCallInventoryAudit _allocatorInventory = new();
+    private readonly ZoneAllocatorDynamicPathAudit _dynamicAllocatorPaths = new();
 
     public ZonePoolRebaseSafetyGateResult Evaluate(
         string zoneExePath,
@@ -33,6 +34,7 @@ public sealed class ZonePoolRebaseSafetyGate
         var controlFlow = _controlFlow.Analyze(zoneExePath);
         var falsePositives = _falsePositives.Analyze(zoneExePath);
         var inventory = _allocatorInventory.Analyze(zoneExePath);
+        var dynamicPaths = _dynamicAllocatorPaths.Analyze(zoneExePath);
 
         var baselineProofsOk = core.HashMatches
                                && core.LayoutValid
@@ -45,16 +47,20 @@ public sealed class ZonePoolRebaseSafetyGate
                                && falsePositives.HashMatches
                                && falsePositives.SitesVerified
                                && inventory.HashMatches
-                               && inventory.InventoryMatches;
+                               && inventory.InventoryMatches
+                               && dynamicPaths.HashMatches
+                               && dynamicPaths.EvidenceVerified
+                               && dynamicPaths.NoStaticAbsoluteAllocatorPointers;
 
-        // This remains deliberately false. Two dynamic direct allocator callers plus any
-        // indirect allocator call paths still need final semantic classification before
-        // we may certify full Player/Mob/NPC dependency coverage.
+        // The allocator-call graph is now closed for all direct calls and contains no
+        // statically stored absolute allocator pointer. Full patch coverage is still kept
+        // false until the complete set of mutable rebase bytes (core + auxiliary sites)
+        // is promoted into one transactional offline patch manifest with rollback proof.
         const bool fullCoverageCertified = false;
         var canWrite = baselineProofsOk && fullCoverageCertified;
 
         var status = baselineProofsOk
-            ? "Alle derzeit implementierten Beweise sind grün. Vollabdeckung bleibt gesperrt: zwei dynamische direkte Allocator-Pfade und indirekte Aufrufe sind noch abschließend zu klassifizieren."
+            ? "Alle aktuellen Hash-/Byte-/Control-Flow-/Allocator-Beweise sind grün. Direkte Allocator-Pfade sind vollständig inventarisiert und die dynamischen ShineMob-Pfade klassifiziert. Schreiben bleibt gesperrt, bis Core- und Zusatzabhängigkeiten in einem vollständigen transaktionalen Offline-Patchmanifest mit Rollback-Nachweis zusammengeführt sind."
             : "Mindestens ein hash-/bytegebundener Sicherheitsbeweis ist fehlgeschlagen. Kein Binärschreibpfad zulässig.";
 
         return new ZonePoolRebaseSafetyGateResult
@@ -65,6 +71,7 @@ public sealed class ZonePoolRebaseSafetyGate
             ControlFlow = controlFlow,
             FalsePositives = falsePositives,
             AllocatorInventory = inventory,
+            DynamicAllocatorPaths = dynamicPaths,
             BaselineProofsVerified = baselineProofsOk,
             FullCoverageCertified = fullCoverageCertified,
             CanWriteBinary = canWrite,
@@ -81,6 +88,7 @@ public sealed class ZonePoolRebaseSafetyGateResult
     public ZonePoolControlFlowAuditResult? ControlFlow { get; init; }
     public ZonePoolFalsePositiveAuditResult? FalsePositives { get; init; }
     public ZoneAllocatorCallInventoryAuditResult? AllocatorInventory { get; init; }
+    public ZoneAllocatorDynamicPathAuditResult? DynamicAllocatorPaths { get; init; }
     public bool BaselineProofsVerified { get; init; }
     public bool FullCoverageCertified { get; init; }
     public bool CanWriteBinary { get; init; }
