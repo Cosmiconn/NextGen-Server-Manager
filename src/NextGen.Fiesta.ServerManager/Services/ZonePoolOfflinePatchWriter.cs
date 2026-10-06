@@ -40,8 +40,13 @@ public sealed class ZonePoolOfflinePatchWriter
             return Failed("Ausgabedatei existiert bereits; automatisches Überschreiben ist verboten: " + outputFull);
 
         var gate = _safetyGate.Evaluate(sourceFull, playerCapacity, mobCapacity, npcCapacity);
-        if (!gate.FullCoverageCertified)
-            return Failed("Rebase-Coverage ist nicht vollständig zertifiziert: " + gate.Detail, gate);
+        if (!gate.FullCoverageCertified
+            || !gate.OfflineWriterCertified
+            || !gate.CanCreateOfflinePatchedCopy
+            || gate.CanWriteBinary)
+        {
+            return Failed("Offline-COPY-Writer ist für dieses Profil nicht vollständig zertifiziert: " + gate.Detail, gate);
+        }
 
         var manifest = gate.PatchManifest ?? _manifestBuilder.Build(sourceFull, playerCapacity, mobCapacity, npcCapacity);
         if (!manifest.ManifestVerified || !manifest.NoOverlaps || !manifest.RollbackVerified)
