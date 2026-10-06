@@ -57,35 +57,37 @@ public partial class MainWindow
         }
 
         if (main.Items.Count > 1 && main.Items[1] is TabItem server && server.Content is TabControl serverSub)
-            ResizeVisibleSubTabs(serverSub, width, 3, 165, 270);
+            ResizeVisibleSubTabs(serverSub, width, 165, 270, 220, 215);
 
         if (main.Items.Count > 2 && main.Items[2] is TabItem diagnostic && diagnostic.Content is TabControl diagnosticSub)
-            ResizeVisibleSubTabs(diagnosticSub, width, 3, 155, 215);
+            ResizeVisibleSubTabs(diagnosticSub, width, 155, 215, 190, 190);
 
         if (main.Items.Count > 3 && main.Items[3] is TabItem tools && tools.Content is TabControl toolsSub)
-            ResizeVisibleSubTabs(toolsSub, width, Math.Max(1, toolsSub.Items.Count), 150, 220);
+            ResizeVisibleSubTabs(toolsSub, width, 150, 220);
     }
 
-    private static void ResizeVisibleSubTabs(TabControl navigation, double windowWidth, int visibleCount, double minWidth, double referenceMaxWidth)
+    private static void ResizeVisibleSubTabs(TabControl navigation, double windowWidth, double minWidth, params double[] referenceWidths)
     {
-        if (visibleCount <= 0)
+        if (referenceWidths.Length == 0)
             return;
 
-        var available = Math.Max(480, windowWidth - 64);
-        var target = windowWidth >= 1180
-            ? referenceMaxWidth
-            : Math.Max(minWidth, (available - ((visibleCount - 1) * 6.0)) / visibleCount);
+        var visibleTabs = navigation.Items.OfType<TabItem>()
+            .Where(item => item.Width > 0 && item.Opacity > 0)
+            .Take(referenceWidths.Length)
+            .ToList();
+        if (visibleTabs.Count == 0)
+            return;
 
-        var resized = 0;
-        foreach (var item in navigation.Items.OfType<TabItem>())
+        if (windowWidth >= 1180)
         {
-            if (item.Width <= 0 || item.Opacity <= 0)
-                continue;
-
-            item.Width = target;
-            resized++;
-            if (resized >= visibleCount)
-                break;
+            for (var i = 0; i < visibleTabs.Count; i++)
+                visibleTabs[i].Width = referenceWidths[Math.Min(i, referenceWidths.Length - 1)];
+            return;
         }
+
+        var available = Math.Max(480, windowWidth - 64);
+        var target = Math.Max(minWidth, (available - ((visibleTabs.Count - 1) * 6.0)) / visibleTabs.Count);
+        foreach (var tab in visibleTabs)
+            tab.Width = target;
     }
 }
