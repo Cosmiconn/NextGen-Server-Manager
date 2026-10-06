@@ -1,5 +1,6 @@
 using System.Text;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -38,9 +39,6 @@ public partial class App : System.Windows.Application
             window.Show();
             Log("MainWindow successfully shown.");
 
-            // CI can opt into a real dispatcher-driven resize smoke without changing
-            // normal production startup. This exercises the SizeChanged breakpoints,
-            // visual-tree transformations and narrow layouts that a compile cannot test.
             if (string.Equals(
                     Environment.GetEnvironmentVariable("NEXTGEN_UI_SMOKE_RESIZE"),
                     "1",
@@ -75,9 +73,6 @@ public partial class App : System.Windows.Application
                 window.WindowState = WindowState.Normal;
                 window.Width = Math.Max(window.MinWidth, target.Width);
                 window.Height = Math.Max(window.MinHeight, target.Height);
-
-                // Give WPF rendering, SizeChanged handlers and queued responsive passes
-                // enough dispatcher turns to settle before inspecting/capturing the frame.
                 await Task.Delay(450);
                 window.UpdateLayout();
                 Log(
@@ -86,6 +81,13 @@ public partial class App : System.Windows.Application
                     $"min={window.MinWidth:F0}x{window.MinHeight:F0}");
                 CaptureUiSmokeScreenshot(window, target.Width, target.Height);
             }
+
+            // Exercise every migrated view on a realistic compact desktop size. This
+            // catches selection-time layout/resource failures that startup alone misses.
+            window.Width = Math.Max(window.MinWidth, 900);
+            window.Height = Math.Max(window.MinHeight, 700);
+            await Task.Delay(350);
+            await RunUiNavigationSmokeAsync(window);
 
             window.Width = Math.Max(window.MinWidth, originalWidth);
             window.Height = Math.Max(window.MinHeight, originalHeight);
@@ -99,7 +101,65 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private static void CaptureUiSmokeScreenshot(MainWindow window, double targetWidth, double targetHeight)
+    private static async Task RunUiNavigationSmokeAsync(MainWindow window)
+    {
+        var main = window.UiSmokeMainNavigation
+            ?? throw new InvalidOperationException("Main navigation was not created.");
+        if (main.Items.Count < 4)
+            throw new InvalidOperationException($"Expected four main navigation items, found {main.Items.Count}.");
+
+        async Task SelectMainAsync(int index, string name)
+        {
+            main.SelectedIndex = index;
+            await Task.Delay(250);
+            window.UpdateLayout();
+            CaptureUiSmokeScreenshot(window, 900, 700, $"nav-{name}");
+            Log($"UI_SMOKE_NAV main={name}");
+        }
+
+        async Task SelectSubAsync(int mainIndex, int subIndex, string name)
+        {
+            main.SelectedIndex = mainIndex;
+            await Task.Delay(120);
+            if (main.Items[mainIndex] is not TabItem mainTab || mainTab.Content is not TabControl sub)
+                throw new InvalidOperationException($"Navigation '{name}' does not expose a sub-navigation TabControl.");
+            if (subIndex < 0 || subIndex >= sub.Items.Count)
+                throw new InvalidOperationException($"Navigation '{name}' sub-index {subIndex} is out of range ({sub.Items.Count}).");
+
+            sub.SelectedIndex = subIndex;
+            await Task.Delay(250);
+            window.UpdateLayout();
+            CaptureUiSmokeScreenshot(window, 900, 700, $"nav-{name}");
+            Log($"UI_SMOKE_NAV view={name}");
+        }
+
+        await SelectMainAsync(0, "dashboard");
+
+        await SelectSubAsync(1, 0, "server-zone-capacity");
+        await SelectSubAsync(1, 1, "server-limits");
+        await SelectSubAsync(1, 2, "server-adaptive-hooks");
+        await SelectSubAsync(1, 3, "server-performance-overflow");
+
+        await SelectSubAsync(2, 0, "diagnostic-logs");
+        await SelectSubAsync(2, 1, "diagnostic-timeline");
+        await SelectSubAsync(2, 2, "diagnostic-pdb");
+
+        await SelectSubAsync(3, 0, "tools-client-map-safety");
+
+        // Return to the reference start page for the final frame/state.
+        main.SelectedIndex = 1;
+        if (main.Items[1] is TabItem serverTab && serverTab.Content is TabControl serverSub)
+            serverSub.SelectedIndex = 0;
+        await Task.Delay(200);
+        window.UpdateLayout();
+        Log("UI_SMOKE_NAV completed.");
+    }
+
+    private static void CaptureUiSmokeScreenshot(
+        MainWindow window,
+        double targetWidth,
+        double targetHeight,
+        string? label = null)
     {
         var outputDirectory = Environment.GetEnvironmentVariable("NEXTGEN_UI_SMOKE_SCREENSHOT_DIR");
         if (string.IsNullOrWhiteSpace(outputDirectory))
@@ -115,7 +175,10 @@ public partial class App : System.Windows.Application
 
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
-        var fileName = $"ui-target-{targetWidth:F0}x{targetHeight:F0}-actual-{width}x{height}.png";
+        var prefix = string.IsNullOrWhiteSpace(label)
+            ? $"ui-target-{targetWidth:F0}x{targetHeight:F0}"
+            : $"ui-{label}";
+        var fileName = $"{prefix}-actual-{width}x{height}.png";
         var path = Path.Combine(outputDirectory, fileName);
         using (var stream = File.Create(path))
             encoder.Save(stream);
