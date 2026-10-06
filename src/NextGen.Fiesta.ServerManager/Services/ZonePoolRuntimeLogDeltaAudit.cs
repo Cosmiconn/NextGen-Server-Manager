@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -5,24 +6,25 @@ namespace NextGen.Fiesta.ServerManager.Services;
 
 /// <summary>
 /// Captures a read-only checkpoint of every recursively discovered NA2016 text log and
-/// later analyzes only bytes written after that checkpoint. This avoids treating historic
-/// server errors as evidence from the certified Zone pool runtime test.
+/// later analyzes only bytes written after that checkpoint. Small rewrite-style logs are
+/// snapshotted so same-length rewrites can be compared exactly instead of forcing REVIEW.
 /// </summary>
 public sealed class ZonePoolRuntimeLogDeltaAudit
 {
     private const int DefaultMaxDeltaBytesPerFile = 4 * 1024 * 1024;
+    private const int SnapshotLimitBytes = 64 * 1024;
 
     private static readonly HashSet<string> BlockingCodes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "NG-CORE-0001", // FATAL ERROR
-        "NG-CORE-0002", // ASSERT
-        "NG-CORE-0003", // Unhandled Exception
-        "NG-PROTO-0003", // Packet Too Long
-        "NG-ZONE-0014", // BlockInfo exhausted
-        "NG-ZONE-0015", // Too many mob
-        "NG-ZONE-0020", // Too many npc
-        "NG-ZONE-0021", // MapCluster exhausted
-        "NG-ZONE-0022"  // BlockDistribute exhausted
+        "NG-CORE-0001",
+        "NG-CORE-0002",
+        "NG-CORE-0003",
+        "NG-PROTO-0003",
+        "NG-ZONE-0014",
+        "NG-ZONE-0015",
+        "NG-ZONE-0020",
+        "NG-ZONE-0021",
+        "NG-ZONE-0022"
     };
 
     private static readonly string[] BlockingRawPatterns =
@@ -72,11 +74,24 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             try
             {
                 var info = new FileInfo(path);
+                string? contentSha256 = null;
+                string? snapshotBase64 = null;
+
+                if (info.Length <= SnapshotLimitBytes)
+                {
+                    var snapshot = ReadSharedFile(path, SnapshotLimitBytes);
+                    contentSha256 = Convert.ToHexString(SHA256.HashData(snapshot));
+                    snapshotBase64 = Convert.ToBase64String(snapshot);
+                    info.Refresh();
+                }
+
                 entries.Add(new ZonePoolLogCheckpointEntry
                 {
                     Path = Path.GetFullPath(path),
                     Length = info.Length,
-                    LastWriteUtc = info.LastWriteTimeUtc
+                    LastWriteUtc = info.LastWriteTimeUtc,
+                    ContentSha256 = contentSha256,
+                    SnapshotBase64 = snapshotBase64
                 });
             }
             catch (Exception ex)
@@ -87,7 +102,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
 
         var checkpoint = new ZonePoolLogCheckpoint
         {
-            FormatVersion = 1,
+            FormatVersion = 2,
             CreatedUtc = DateTimeOffset.UtcNow,
             ServerRoot = root,
             MaxDepth = 8,
@@ -111,6 +126,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             return CheckpointFailed("Checkpoint konnte nicht geschrieben werden: " + ex.Message);
         }
 
+        var snapshotted = checkpoint.Files.Count(x => !string.IsNullOrWhiteSpace(x.SnapshotBase64));
         return new ZonePoolLogCheckpointResult
         {
             Success = true,
@@ -118,7 +134,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             ServerRoot = root,
             CreatedUtc = checkpoint.CreatedUtc,
             FileCount = checkpoint.Files.Count,
-            Detail = $"LOG CHECKPOINT OK: {checkpoint.Files.Count} rekursiv erkannte Logdatei(en) checkpointed; Serverdateien unverändert."
+            Detail = $"LOG CHECKPOINT OK: {checkpoint.Files.Count} rekursiv erkannte Logdatei(en), {snapshotted} kleine Rewrite-Logs bytegenau gesichert; Serverdateien unverändert."
         };
     }
 
@@ -156,7 +172,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             return AuditFailed("Checkpoint konnte nicht gelesen werden: " + ex.Message);
         }
 
-        if (checkpoint is null || checkpoint.FormatVersion != 1 || !PathEquals(checkpoint.ServerRoot, root))
+        if (checkpoint is null || checkpoint.FormatVersion is < 1 or > 2 || !PathEquals(checkpoint.ServerRoot, root))
             return AuditFailed("Checkpoint gehört nicht zu diesem Server-Root oder besitzt ein unbekanntes Format.");
 
         var oldFiles = checkpoint.Files.ToDictionary(x => x.Path, StringComparer.OrdinalIgnoreCase);
@@ -175,6 +191,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
         var evidenceGaps = new List<string>();
         var changedFiles = 0;
         var newFiles = 0;
+        var rewrittenFiles = 0;
         var rotatedOrTruncatedFiles = 0;
         long totalDeltaBytes = 0;
         var incomplete = false;
@@ -192,14 +209,30 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             }
             if (!existsNow || current is null) continue;
 
+            if (existed && old is not null && current.Length == old.Length && current.LastWriteTimeUtc > old.LastWriteUtc.AddSeconds(1))
+            {
+                if (TryAnalyzeSameLengthRewrite(path, old, current, findings, out var inspectedBytes, out var rewriteDetail))
+                {
+                    if (inspectedBytes > 0)
+                    {
+                        changedFiles++;
+                        rewrittenFiles++;
+                        totalDeltaBytes += inspectedBytes;
+                    }
+                    continue;
+                }
+
+                incomplete = true;
+                evidenceGaps.Add(rewriteDetail);
+                continue;
+            }
+
             long offset;
             long available;
             var rotation = false;
 
             if (!existed || old is null)
             {
-                // A newly discovered file is relevant only when it was written around/after
-                // the checkpoint. Older untouched files can appear due to directory races.
                 if (current.LastWriteTimeUtc < checkpoint.CreatedUtc.UtcDateTime.AddSeconds(-2))
                     continue;
                 offset = 0;
@@ -213,8 +246,6 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             }
             else if (current.Length < old.Length)
             {
-                // Truncation/rotation: old byte offset is no longer meaningful. Read the new
-                // file from zero, but force REVIEW because continuity cannot be proven.
                 offset = 0;
                 available = current.Length;
                 rotation = true;
@@ -224,11 +255,6 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             }
             else
             {
-                if (current.LastWriteTimeUtc > old.LastWriteUtc.AddSeconds(1))
-                {
-                    incomplete = true;
-                    evidenceGaps.Add("Log änderte sich ohne Längenänderung; exakter Delta-Bereich unbestimmbar: " + path);
-                }
                 continue;
             }
 
@@ -254,15 +280,10 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
                     evidenceGaps.Add("Log schrumpfte während des Audits: " + path);
                     continue;
                 }
+
                 stream.Seek(offset, SeekOrigin.Begin);
                 var buffer = new byte[toRead];
-                var readTotal = 0;
-                while (readTotal < buffer.Length)
-                {
-                    var read = stream.Read(buffer, readTotal, buffer.Length - readTotal);
-                    if (read <= 0) break;
-                    readTotal += read;
-                }
+                var readTotal = ReadFully(stream, buffer);
                 deltaText = DecodeLogBytes(buffer.AsSpan(0, readTotal));
             }
             catch (Exception ex)
@@ -272,39 +293,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
                 continue;
             }
 
-            var lines = SplitLines(deltaText);
-            if (lines.Count == 0) continue;
-
-            foreach (var issue in _analyzer.Analyze(lines, path))
-            {
-                findings.Add(new ZonePoolLogDeltaFinding
-                {
-                    Source = path,
-                    Severity = issue.Severity.ToString(),
-                    Code = issue.Code ?? string.Empty,
-                    Title = issue.Title,
-                    Evidence = issue.Evidence,
-                    Blocking = issue.Code is not null && BlockingCodes.Contains(issue.Code)
-                });
-            }
-
-            foreach (var line in lines)
-            {
-                foreach (var pattern in BlockingRawPatterns)
-                {
-                    if (!line.Contains(pattern, StringComparison.OrdinalIgnoreCase)) continue;
-                    findings.Add(new ZonePoolLogDeltaFinding
-                    {
-                        Source = path,
-                        Severity = "Critical",
-                        Code = "NG-ZONEPOOL-RUNTIME",
-                        Title = "Harter Runtime-Sicherheitsindikator",
-                        Evidence = line.Trim(),
-                        Blocking = true
-                    });
-                    break;
-                }
-            }
+            AnalyzeLines(SplitLines(deltaText), path, findings);
 
             if (rotation || truncated)
             {
@@ -320,7 +309,6 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             }
         }
 
-        // Deduplicate identical rule/evidence hits while retaining source distinction.
         findings = findings
             .GroupBy(x => $"{x.Source}|{x.Code}|{x.Evidence}", StringComparer.OrdinalIgnoreCase)
             .Select(x => x.First())
@@ -335,11 +323,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
              || x.Severity.Equals("Warning", StringComparison.OrdinalIgnoreCase)
              || x.Severity.Equals("Critical", StringComparison.OrdinalIgnoreCase)));
 
-        var status = blockers > 0
-            ? "BLOCKED"
-            : incomplete || reviewFindings > 0
-                ? "REVIEW"
-                : "CLEAN";
+        var status = blockers > 0 ? "BLOCKED" : incomplete || reviewFindings > 0 ? "REVIEW" : "CLEAN";
 
         return new ZonePoolLogDeltaAuditResult
         {
@@ -353,6 +337,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             CheckpointPath = checkpointFull,
             ChangedFileCount = changedFiles,
             NewFileCount = newFiles,
+            RewrittenFileCount = rewrittenFiles,
             RotatedOrTruncatedFileCount = rotatedOrTruncatedFiles,
             TotalDeltaBytes = totalDeltaBytes,
             EvidenceComplete = !incomplete,
@@ -360,20 +345,139 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             EvidenceGaps = evidenceGaps,
             Detail = status switch
             {
-                "BLOCKED" => $"LOG DELTA BLOCKED: {blockers} harter Befund in ausschließlich seit dem Checkpoint hinzugekommenen Logdaten.",
+                "BLOCKED" => $"LOG DELTA BLOCKED: {blockers} harter Befund in ausschließlich seit dem Checkpoint hinzugekommenen/geänderten Logdaten.",
                 "REVIEW" => $"LOG DELTA REVIEW: keine harte Patch-Crash-Signatur, aber {reviewFindings} Warn-/Fehlerbefund(e) oder {evidenceGaps.Count} Evidenzlücke(n) müssen geprüft werden.",
-                _ => $"LOG DELTA CLEAN: {changedFiles} geänderte Logdatei(en), {totalDeltaBytes:N0} neue Byte, keine neuen Warn-/Fehler-/Crashindikatoren."
+                _ => $"LOG DELTA CLEAN: {changedFiles} geänderte Logdatei(en), davon {rewrittenFiles} bytegenau verglichene Rewrite-Datei(en); keine neuen Warn-/Fehler-/Crashindikatoren."
             }
         };
     }
 
-    private static string DecodeLogBytes(ReadOnlySpan<byte> bytes)
+    private bool TryAnalyzeSameLengthRewrite(string path, ZonePoolLogCheckpointEntry old, FileInfo current, List<ZonePoolLogDeltaFinding> findings, out long inspectedBytes, out string detail)
     {
-        if (bytes.IsEmpty) return string.Empty;
-        // Fiesta diagnostics are overwhelmingly ASCII-compatible. UTF-8 replacement
-        // characters do not affect the ASCII error signatures/rules used here.
-        return Encoding.UTF8.GetString(bytes);
+        inspectedBytes = 0;
+        detail = $"Log änderte sich ohne Längenänderung; exakter Delta-Bereich unbestimmbar: {path}";
+
+        if (string.IsNullOrWhiteSpace(old.SnapshotBase64) || string.IsNullOrWhiteSpace(old.ContentSha256))
+            return false;
+        if (current.Length > SnapshotLimitBytes)
+        {
+            detail = $"Rewrite-Log ist größer als das Snapshot-Limit und kann nicht bytegenau verglichen werden: {path}";
+            return false;
+        }
+
+        try
+        {
+            var oldBytes = Convert.FromBase64String(old.SnapshotBase64);
+            var currentBytes = ReadSharedFile(path, SnapshotLimitBytes);
+            var oldHash = Convert.ToHexString(SHA256.HashData(oldBytes));
+            var currentHash = Convert.ToHexString(SHA256.HashData(currentBytes));
+
+            if (!oldHash.Equals(old.ContentSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                detail = $"Checkpoint-Snapshot-Hash ist inkonsistent: {path}";
+                return false;
+            }
+            if (oldHash.Equals(currentHash, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            inspectedBytes = currentBytes.LongLength;
+            var oldLines = SplitLines(DecodeLogBytes(oldBytes));
+            var currentLines = SplitLines(DecodeLogBytes(currentBytes));
+            AnalyzeLines(GetIntroducedLines(oldLines, currentLines), path, findings);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            detail = $"Same-Length-Rewrite konnte nicht bytegenau verglichen werden: {path}: {ex.Message}";
+            return false;
+        }
     }
+
+    private void AnalyzeLines(IReadOnlyList<string> lines, string path, List<ZonePoolLogDeltaFinding> findings)
+    {
+        if (lines.Count == 0) return;
+
+        foreach (var issue in _analyzer.Analyze(lines, path))
+        {
+            findings.Add(new ZonePoolLogDeltaFinding
+            {
+                Source = path,
+                Severity = issue.Severity.ToString(),
+                Code = issue.Code ?? string.Empty,
+                Title = issue.Title ?? string.Empty,
+                Evidence = issue.Evidence ?? string.Empty,
+                Blocking = issue.Code is not null && BlockingCodes.Contains(issue.Code)
+            });
+        }
+
+        foreach (var line in lines)
+        {
+            foreach (var pattern in BlockingRawPatterns)
+            {
+                if (!line.Contains(pattern, StringComparison.OrdinalIgnoreCase)) continue;
+                findings.Add(new ZonePoolLogDeltaFinding
+                {
+                    Source = path,
+                    Severity = "Critical",
+                    Code = "NG-ZONEPOOL-RUNTIME",
+                    Title = "Harter Runtime-Sicherheitsindikator",
+                    Evidence = line.Trim(),
+                    Blocking = true
+                });
+                break;
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> GetIntroducedLines(IReadOnlyList<string> oldLines, IReadOnlyList<string> currentLines)
+    {
+        var remaining = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var line in oldLines)
+        {
+            remaining.TryGetValue(line, out var count);
+            remaining[line] = count + 1;
+        }
+
+        var introduced = new List<string>();
+        foreach (var line in currentLines)
+        {
+            if (remaining.TryGetValue(line, out var count) && count > 0)
+            {
+                if (count == 1) remaining.Remove(line);
+                else remaining[line] = count - 1;
+            }
+            else
+            {
+                introduced.Add(line);
+            }
+        }
+        return introduced;
+    }
+
+    private static byte[] ReadSharedFile(string path, int maxBytes)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length > maxBytes)
+            throw new IOException($"Datei ist mit {stream.Length:N0} Byte größer als das Snapshot-Limit {maxBytes:N0} Byte.");
+        var buffer = new byte[(int)stream.Length];
+        var readTotal = ReadFully(stream, buffer);
+        return readTotal == buffer.Length ? buffer : buffer.AsSpan(0, readTotal).ToArray();
+    }
+
+    private static int ReadFully(Stream stream, byte[] buffer)
+    {
+        var readTotal = 0;
+        while (readTotal < buffer.Length)
+        {
+            var read = stream.Read(buffer, readTotal, buffer.Length - readTotal);
+            if (read <= 0) break;
+            readTotal += read;
+        }
+        return readTotal;
+    }
+
+    private static string DecodeLogBytes(ReadOnlySpan<byte> bytes)
+        => bytes.IsEmpty ? string.Empty : Encoding.UTF8.GetString(bytes);
 
     private static IReadOnlyList<string> SplitLines(string text)
         => text.Replace("\r\n", "\n", StringComparison.Ordinal)
@@ -392,10 +496,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
 
     private static bool PathEquals(string left, string right)
     {
-        try
-        {
-            return string.Equals(NormalizeDirectory(left), NormalizeDirectory(right), StringComparison.OrdinalIgnoreCase);
-        }
+        try { return string.Equals(NormalizeDirectory(left), NormalizeDirectory(right), StringComparison.OrdinalIgnoreCase); }
         catch { return false; }
     }
 
@@ -420,6 +521,8 @@ public sealed class ZonePoolLogCheckpointEntry
     public string Path { get; init; } = string.Empty;
     public long Length { get; init; }
     public DateTime LastWriteUtc { get; init; }
+    public string? ContentSha256 { get; init; }
+    public string? SnapshotBase64 { get; init; }
 }
 
 public sealed class ZonePoolLogCheckpointResult
@@ -445,6 +548,7 @@ public sealed class ZonePoolLogDeltaAuditResult
     public string CheckpointPath { get; init; } = string.Empty;
     public int ChangedFileCount { get; init; }
     public int NewFileCount { get; init; }
+    public int RewrittenFileCount { get; init; }
     public int RotatedOrTruncatedFileCount { get; init; }
     public long TotalDeltaBytes { get; init; }
     public IReadOnlyList<ZonePoolLogDeltaFinding> Findings { get; init; } = Array.Empty<ZonePoolLogDeltaFinding>();
