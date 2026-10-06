@@ -25,7 +25,6 @@ public partial class MainWindow
 
         UtilityThemeWindows.Add(window, new object());
         var text = (Brush)window.FindResource("Text");
-        var muted = (Brush)window.FindResource("MutedStrong");
 
         // The old Settings view used to inherit Foreground from its TabItem. Once the
         // same element is moved into the global utility overlay that inheritance chain
@@ -35,8 +34,5 @@ public partial class MainWindow
             window._utilityContentHost.Foreground = text;
         if (window._utilityTitle is not null)
             window._utilityTitle.Foreground = text;
-
-        if (window._utilityOverlay is not null)
-            TextElement.SetForeground(window._utilityOverlay, muted);
     }
 }
