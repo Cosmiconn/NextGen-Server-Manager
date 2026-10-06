@@ -82,8 +82,6 @@ public partial class App : System.Windows.Application
                 CaptureUiSmokeScreenshot(window, target.Width, target.Height);
             }
 
-            // Exercise every migrated view on a realistic compact desktop size. This
-            // catches selection-time layout/resource failures that startup alone misses.
             window.Width = Math.Max(window.MinWidth, 900);
             window.Height = Math.Max(window.MinHeight, 700);
             await Task.Delay(350);
@@ -133,6 +131,17 @@ public partial class App : System.Windows.Application
             Log($"UI_SMOKE_NAV view={name}");
         }
 
+        async Task OpenUtilityAsync(Action open, string name)
+        {
+            open();
+            await Task.Delay(250);
+            window.UpdateLayout();
+            CaptureUiSmokeScreenshot(window, 900, 700, $"utility-{name}");
+            Log($"UI_SMOKE_UTILITY view={name}");
+            window.UiSmokeHideUtility();
+            await Task.Delay(120);
+        }
+
         await SelectMainAsync(0, "dashboard");
 
         await SelectSubAsync(1, 0, "server-zone-capacity");
@@ -146,7 +155,10 @@ public partial class App : System.Windows.Application
 
         await SelectSubAsync(3, 0, "tools-client-map-safety");
 
-        // Return to the reference start page for the final frame/state.
+        await OpenUtilityAsync(window.UiSmokeShowSettings, "settings");
+        await OpenUtilityAsync(window.UiSmokeShowManual, "manual");
+        await OpenUtilityAsync(window.UiSmokeShowCredits, "credits");
+
         main.SelectedIndex = 1;
         if (main.Items[1] is TabItem serverTab && serverTab.Content is TabControl serverSub)
             serverSub.SelectedIndex = 0;
