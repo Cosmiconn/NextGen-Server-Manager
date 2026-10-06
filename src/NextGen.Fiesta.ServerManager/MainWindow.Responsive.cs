@@ -31,11 +31,11 @@ public partial class MainWindow
         ResponsiveWindows.Add(window, new object());
 
         // 1536x864 stays the visual reference size, but it must never become a fixed
-        // canvas. The shell scales down to laptop-sized work areas and grows naturally
-        // on larger displays. WPF keeps DPI scaling independent from these breakpoints.
+        // canvas. Allow the user to reach the narrow layout breakpoints on a normal
+        // desktop while still enforcing a practical floor for the operations UI.
         var workArea = SystemParameters.WorkArea;
-        window.MinWidth = Math.Min(1024, Math.Max(900, workArea.Width - 24));
-        window.MinHeight = Math.Min(680, Math.Max(620, workArea.Height - 24));
+        window.MinWidth = Math.Max(640, Math.Min(720, workArea.Width - 24));
+        window.MinHeight = Math.Max(520, Math.Min(620, workArea.Height - 24));
         FitResponsiveWindowToWorkArea(window, workArea);
 
         window.SizeChanged += (_, _) => ApplyResponsiveLayout(window);
@@ -115,6 +115,8 @@ public partial class MainWindow
         if (title is not null)
         {
             title.FontSize = compact ? 22 : 25;
+            title.TextWrapping = TextWrapping.NoWrap;
+            title.TextTrimming = TextTrimming.CharacterEllipsis;
         }
 
         var subtitle = ResponsiveDescendants<TextBlock>(grid)
@@ -122,6 +124,7 @@ public partial class MainWindow
         if (subtitle is not null)
         {
             subtitle.FontSize = compact ? 11 : 14;
+            subtitle.TextWrapping = TextWrapping.NoWrap;
             subtitle.TextTrimming = TextTrimming.CharacterEllipsis;
         }
 
@@ -315,8 +318,9 @@ public partial class MainWindow
 
     private static void ApplyResponsivePrimaryNavigation(MainWindow window, double width)
     {
-        // The existing target shell already calculates the exact wide layout. Only
-        // intervene on very narrow work areas where its 900-DIP floor would overflow.
+        // The exact reference calculation in MainWindow.xaml.cs remains authoritative
+        // at normal desktop widths. Only remove its legacy floor when the user deliberately
+        // resizes into the narrow operating mode.
         if (width >= 960)
         {
             return;
@@ -332,8 +336,8 @@ public partial class MainWindow
             return;
         }
 
-        var available = Math.Max(760, width - 32);
-        var tabWidth = Math.Max(180, (available - 40) / 4.0);
+        var available = Math.Max(560, width - 32);
+        var tabWidth = Math.Max(130, (available - 24) / 4.0);
         foreach (var tab in navigation.Items.OfType<TabItem>().Take(4))
         {
             tab.Width = tabWidth;
