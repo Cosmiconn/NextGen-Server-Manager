@@ -18,7 +18,7 @@ Bestehende Dashboard-Funktionen bleiben vollständig erhalten:
 - Config öffnen
 - Smart Start / Smart Stop / Smart Restart
 
-Status: **Ziel-Layout umgesetzt, CI-validiert.**
+Status: **Ziel-Layout umgesetzt, real im Windows-Smoke geöffnet und gerendert.**
 
 ### Serverleistung
 In der freigegebenen Referenz sind genau drei Subtabs sichtbar:
@@ -29,10 +29,10 @@ In der freigegebenen Referenz sind genau drei Subtabs sichtbar:
 `Performance / Vertical Scaling` bleibt vollständig erhalten und ist über den Chevron-/Overflow-Pfad erreichbar, ohne einen vierten sichtbaren Referenz-Subtab einzuführen.
 
 Status:
-- Zone Auslastung / Scaling: **Ziel-Layout umgesetzt**
-- Limits / Capacity: **responsive Ziel-Ansicht umgesetzt**
-- Adaptive Hooks: **responsive Ziel-Ansicht umgesetzt**
-- Performance / Vertical Scaling: **responsive Ziel-Ansicht im Overflow umgesetzt**
+- Zone Auslastung / Scaling: **Ziel-Layout umgesetzt und gerendert**
+- Limits / Capacity: **responsive Ziel-Ansicht umgesetzt und gerendert**
+- Adaptive Hooks: **responsive Ziel-Ansicht umgesetzt und gerendert**
+- Performance / Vertical Scaling: **responsive Ziel-Ansicht im Overflow umgesetzt und gerendert**
 
 ### Diagnostic
 Subtabs:
@@ -40,7 +40,7 @@ Subtabs:
 2. Live Timeline
 3. PDB / Symbole
 
-Status: **alle drei Ansichten auf Card-/Toolbar-/Tabellen-Sprache umgestellt; PDB-Enter-Suche erhalten.**
+Status: **alle drei Ansichten auf Card-/Toolbar-/Tabellen-Sprache umgestellt, real geöffnet und gerendert; PDB-Enter-Suche erhalten.**
 
 ### Tools
 Subtabs:
@@ -48,7 +48,7 @@ Subtabs:
 2. später Spielfunktionen / DLL Hook
 3. später OPTool
 
-Status: `Client / Map Safety` **responsive Ziel-Ansicht umgesetzt**. Zukünftige Module werden innerhalb von Tools ergänzt und dürfen die vier Hauptkategorien nicht aufblasen.
+Status: `Client / Map Safety` **responsive Ziel-Ansicht umgesetzt und im Windows-Smoke gerendert**. Zukünftige Module werden innerhalb von Tools ergänzt und dürfen die vier Hauptkategorien nicht aufblasen.
 
 ### Globale Utilities
 Klein und außerhalb der Hauptnavigation:
@@ -56,22 +56,24 @@ Klein und außerhalb der Hauptnavigation:
 - Handbuch
 - Credits
 
-Status: **umgesetzt**; die bisherigen Einstellungen-/Hinweis-Inhalte werden in den Utility-Bereich umgehängt, nicht verworfen.
+Status: **umgesetzt und real gerendert**. Die bisherigen Einstellungen-/Hinweis-Inhalte werden in den Utility-Bereich umgehängt, nicht verworfen. Ein durch die Render-Abnahme entdeckter Foreground-Verlust der alten Settings-Inhalte wurde zentral im Utility-Host behoben.
 
 ## Verbindliche Funktionszuordnung aus 0.3.4
 
 | 0.3.4 Ansicht | Zielort | Status |
 |---|---|---|
-| Dashboard | Dashboard | erhalten, neu aufgebaut |
-| Zone Auslastung / Scaling | Serverleistung > Zone Auslastung / Scaling | erhalten, neu aufgebaut |
-| Performance / Vertical Scaling | Serverleistung > Overflow | erhalten, neu aufgebaut |
-| Adaptive Hooks | Serverleistung > Adaptive Hooks | erhalten, neu aufgebaut |
-| Limits / Capacity | Serverleistung > Limits / Capacity | erhalten, neu aufgebaut |
-| Logs & Diagnose | Diagnostic > Logs & Diagnose | erhalten, neu aufgebaut |
-| Live Timeline | Diagnostic > Live Timeline | erhalten, neu aufgebaut |
-| PDB / Symbole | Diagnostic > PDB / Symbole | erhalten, neu aufgebaut |
-| Client / Map Safety | Tools > Client / Map Safety | erhalten, neu aufgebaut |
-| Einstellungen / Hinweise | globaler Einstellungen-Button | Inhalte erhalten |
+| Dashboard | Dashboard | erhalten, neu aufgebaut, gerendert |
+| Zone Auslastung / Scaling | Serverleistung > Zone Auslastung / Scaling | erhalten, neu aufgebaut, gerendert |
+| Performance / Vertical Scaling | Serverleistung > Overflow | erhalten, neu aufgebaut, gerendert |
+| Adaptive Hooks | Serverleistung > Adaptive Hooks | erhalten, neu aufgebaut, gerendert |
+| Limits / Capacity | Serverleistung > Limits / Capacity | erhalten, neu aufgebaut, gerendert |
+| Logs & Diagnose | Diagnostic > Logs & Diagnose | erhalten, neu aufgebaut, gerendert |
+| Live Timeline | Diagnostic > Live Timeline | erhalten, neu aufgebaut, gerendert |
+| PDB / Symbole | Diagnostic > PDB / Symbole | erhalten, neu aufgebaut, gerendert |
+| Client / Map Safety | Tools > Client / Map Safety | erhalten, neu aufgebaut, gerendert |
+| Einstellungen / Hinweise | globaler Einstellungen-Button | Inhalte erhalten, gerendert |
+| Handbuch | globale Utility | gerendert |
+| Credits | globale Utility | gerendert |
 
 ## Visuelles Ziel
 
@@ -94,6 +96,7 @@ Status: **umgesetzt**; die bisherigen Einstellungen-/Hinweis-Inhalte werden in d
 - Größere Fenster geben Tabellen und Inhaltsflächen zusätzlichen Platz; kein Bitmap-/Viewbox-Stretching.
 - Kleinere Fenster verdichten Toolbar- und Aktionsbuttons zu Icons mit Tooltips.
 - Hauptnavigation wird unterhalb des Referenzbereichs proportional schmaler.
+- Unterhalb der Desktopbreite werden Haupttab-Untertitel ausgeblendet, bevor sie abgeschnitten werden; Icon + Haupttitel bleiben sichtbar.
 - Serverleistung-/Diagnostic-Subtabs werden bei Bedarf proportional verkleinert; Performance bleibt im Overflow.
 - Die sechs Live-Capacity-Karten brechen auf kleineren Fenstern kontrolliert in mehrere Reihen um.
 - Dashboard-Karten wechseln bei schmaler Breite von 4 auf 2 Spalten.
@@ -111,6 +114,22 @@ Die Responsive-Logik ist bewusst in separaten Partial-Dateien gehalten:
 
 Damit bleibt die 1536×864-Referenzgeometrie vom schmalen Fallback nachvollziehbar getrennt.
 
+## Automatische Windows-UI-Abnahme
+
+Der Windows-Workflow prüft nicht mehr nur den Compiler. Die veröffentlichte WPF-EXE wird auf dem Windows-Runner real gestartet und muss `MainWindow successfully shown.` melden. Danach fährt der echte Dispatcher mehrere Fenstergrößen und Navigationspfade ab.
+
+Aktuell verpflichtend getestet:
+- Resize: 1180×760, 900×700, **exakt 720×620**, anschließend wieder größer.
+- Dashboard.
+- Serverleistung: Zone Capacity, Limits, Adaptive Hooks, Performance-Overflow.
+- Diagnostic: Logs, Live Timeline, PDB/Symbole.
+- Tools: Client/Map Safety.
+- Utilities: Einstellungen, Handbuch, Credits.
+- Keine `FATAL`-Meldung und kein unerwartetes Prozessende.
+- Mindestens **16 echte `RenderTargetBitmap`-PNG-Screenshots** als CI-Artefakt.
+
+Der GitHub-Windows-Runner stellt nur ungefähr 1024 px Arbeitsbreite bereit. Deshalb kann dort die verbindliche 1536×864-Referenzgröße nicht als echtes Top-Level-Windows-Fenster dargestellt werden. Das ist der verbleibende visuelle Abnahmepunkt auf einem ausreichend großen realen Windows-Desktop.
+
 ## Implementierungsfortschritt
 
 1. [x] Styles/Brushes und reusable Navigation-/Card-Styles.
@@ -120,11 +139,12 @@ Damit bleibt die 1536×864-Referenzgeometrie vom schmalen Fallback nachvollziehb
 5. [x] Dashboard und Live-Zone-Kapazität in Zieloptik überführt.
 6. [x] Limits, Adaptive Hooks, Performance, Diagnostic und Client / Map Safety in dieselbe visuelle Sprache überführt.
 7. [x] Responsive Breakpoints und schmale Inhaltslayouts implementiert.
-8. [x] Nach zusammenhängenden Blöcken Windows-CI / win-x64 Publish geprüft.
-9. [ ] Realer Windows-Laufzeittest bei 1536×864 mit Screenshotvergleich.
-10. [ ] Resize-Smoke-Test unterhalb der Referenzbreite und bei maximiertem Fenster.
-11. [ ] Sichtbare Abweichungen aus den Screenshots korrigieren.
-12. [ ] Erst danach Merge-Freigabe nach `main`.
+8. [x] Windows-CI / win-x64 Publish geprüft.
+9. [x] Reale Windows-Startup-, Resize- und Navigation-Smokes bis 720×620.
+10. [x] Gerenderte CI-Screenshots aller migrierten Hauptansichten und Utilities.
+11. [ ] Realer Windows-Laufzeittest bei 1536×864 mit direktem Referenzbildvergleich.
+12. [ ] Sichtbare Restabweichungen aus diesem 1536×864-Vergleich korrigieren.
+13. [ ] Erst danach Merge-Freigabe nach `main`.
 
 ## Abnahmekriterien
 
@@ -136,5 +156,5 @@ Damit bleibt die 1536×864-Referenzgeometrie vom schmalen Fallback nachvollziehb
 - Fenster bleibt beim Vergrößern und Verkleinern bedienbar; Inhalte werden umgeordnet oder scrollbar statt abgeschnitten.
 - Zielbild wird visuell pixelnah reproduziert.
 - Ein grüner Compiler ist **keine** visuelle Abnahme.
-- Vor Merge sind ein realer Windows-Screenshot der Referenzgröße und mindestens ein schmalerer Resize-Screenshot erforderlich.
+- Vor Merge ist weiterhin ein echter 1536×864-Screenshot auf ausreichend großem Windows-Desktop mit direktem Vergleich zur freigegebenen Referenz erforderlich.
 - Erst nach realer Windows-Abnahme nach `main` mergen.
