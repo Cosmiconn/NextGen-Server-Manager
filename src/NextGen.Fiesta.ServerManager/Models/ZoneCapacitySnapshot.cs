@@ -16,6 +16,17 @@ public sealed class ZoneCapacitySnapshot
     public int ConfiguredMaps { get; init; }
     public int MapBlockLimit { get; init; } = 256;
     public int MapClusterLimit { get; init; } = 512;
+
+    public bool ObjectPoolsVerified { get; init; }
+    public int PlayerPoolCount { get; init; }
+    public int PlayerPoolLimit { get; init; } = 1500;
+    public int MobPoolCount { get; init; }
+    public int MobPoolLimit { get; init; } = 8000;
+    public int NpcPoolCount { get; init; }
+    public int NpcPoolLimit { get; init; } = 256;
+    public string ObjectPoolDetail { get; init; } = string.Empty;
+    public double ObjectPoolPercent { get; init; }
+
     public double OverallPercent { get; init; }
     public string Pressure { get; init; } = "Unbekannt";
     public string Trend { get; init; } = "–";
@@ -27,5 +38,8 @@ public sealed class ZoneCapacitySnapshot
     public string CpuText => CpuCorePercent > 0.1 ? $"{CpuCorePercent:F0}% Core / {CpuTotalPercent:F1}% Gesamt" : $"{CpuTotalPercent:F1}%";
     public string MemoryText => PrivateMemoryMb > 0 ? $"{PrivateMemoryMb:F0} MB privat / {WorkingSetMb:F0} MB WS" : "–";
     public string MapText => $"{ConfiguredMaps:N0} / {MapBlockLimit:N0}";
+    public string PoolText => ObjectPoolsVerified
+        ? $"P {PlayerPoolCount:N0}/{PlayerPoolLimit:N0} · M {MobPoolCount:N0}/{MobPoolLimit:N0} · N {NpcPoolCount:N0}/{NpcPoolLimit:N0}"
+        : "–";
     public string OverallText => $"{OverallPercent:F0}%";
 }

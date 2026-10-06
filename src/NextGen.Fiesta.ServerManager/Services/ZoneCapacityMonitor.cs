@@ -9,6 +9,7 @@ public sealed class ZoneCapacityMonitor
     private const int MapClusterLimit = 512;
     private readonly Dictionary<int, Queue<(DateTime Time, double Score)>> _history = new();
     private readonly WorldManagerCapacityProbe _worldManagerProbe = new();
+    private readonly ZoneObjectPoolProbe _zoneObjectPoolProbe = new();
 
     public IReadOnlyList<ZoneCapacitySnapshot> Build(
         IReadOnlyList<FiestaServiceEntry> services,
@@ -31,13 +32,24 @@ public sealed class ZoneCapacityMonitor
             // Core-equivalent CPU is intentionally used here. A mostly single-threaded Zone can be saturated
             // while Windows still reports a small percentage of total machine CPU on many-core hosts.
             var cpuPressure = Math.Clamp(zone.CpuCorePercent, 0, 100);
+
+            var pools = _zoneObjectPoolProbe.Read(zone);
+            var playerPoolPercent = pools.RuntimeVerified ? Percent(pools.PlayerCount, pools.PlayerLimit) : 0;
+            var mobPoolPercent = pools.RuntimeVerified ? Percent(pools.MobCount, pools.MobLimit) : 0;
+            var npcPoolPercent = pools.RuntimeVerified ? Percent(pools.NpcCount, pools.NpcLimit) : 0;
+            var objectPoolPercent = new[] { playerPoolPercent, mobPoolPercent, npcPoolPercent }.Max();
+
             var hardLimitEvent = FindHardLimitEvent(diagnostics, number);
-            var overall = hardLimitEvent is null ? new[] { clientPercent, mapPercent, memoryPercent, cpuPressure }.Max() : 100.0;
+            var overall = hardLimitEvent is null
+                ? new[] { clientPercent, mapPercent, memoryPercent, cpuPressure, objectPoolPercent }.Max()
+                : 100.0;
 
             var trend = TrackTrend(number, overall, now);
-            var pressure = hardLimitEvent is null ? Classify(zone, clientPercent, mapPercent, memoryPercent, cpuPressure, settings) : "KRITISCH";
+            var pressure = hardLimitEvent is null
+                ? Classify(zone, clientPercent, mapPercent, memoryPercent, cpuPressure, objectPoolPercent, settings)
+                : "KRITISCH";
             var recommendation = hardLimitEvent is null
-                ? Recommend(zone, configuredMaps, clientPercent, mapPercent, memoryPercent, cpuPressure, trend, pressure, settings)
+                ? Recommend(zone, configuredMaps, clientPercent, mapPercent, memoryPercent, cpuPressure, pools, trend, pressure, settings)
                 : $"Harter Pool-/Map-Grenzfehler im Log: {hardLimitEvent.Title}. Neue Zone/Lastverlagerung prüfen.";
 
             result.Add(new ZoneCapacitySnapshot
@@ -55,6 +67,15 @@ public sealed class ZoneCapacityMonitor
                 ConfiguredMaps = configuredMaps,
                 MapBlockLimit = MapBlockLimit,
                 MapClusterLimit = MapClusterLimit,
+                ObjectPoolsVerified = pools.RuntimeVerified,
+                PlayerPoolCount = pools.PlayerCount,
+                PlayerPoolLimit = pools.PlayerLimit,
+                MobPoolCount = pools.MobCount,
+                MobPoolLimit = pools.MobLimit,
+                NpcPoolCount = pools.NpcCount,
+                NpcPoolLimit = pools.NpcLimit,
+                ObjectPoolDetail = pools.Detail,
+                ObjectPoolPercent = objectPoolPercent,
                 OverallPercent = overall,
                 Pressure = pressure,
                 Trend = trend,
@@ -187,19 +208,36 @@ public sealed class ZoneCapacityMonitor
         return delta >= 7 ? "↑ stark steigend" : delta >= 3 ? "↗ steigend" : delta <= -7 ? "↓ stark fallend" : delta <= -3 ? "↘ fallend" : "→ stabil";
     }
 
-    private static string Classify(FiestaServiceEntry zone, double players, double maps, double memory, double cpu, AppSettings settings)
+    private static string Classify(
+        FiestaServiceEntry zone,
+        double players,
+        double maps,
+        double memory,
+        double cpu,
+        double objectPools,
+        AppSettings settings)
     {
         if (zone.State != ServiceRuntimeState.Running) return zone.State == ServiceRuntimeState.Stopped ? "GESTOPPT" : "NICHT BEREIT";
-        if (players >= settings.ZoneCriticalPercent || maps >= settings.ZoneCriticalPercent || memory >= settings.ZoneCriticalPercent || cpu >= settings.ZoneCriticalPercent)
+        if (new[] { players, maps, memory, cpu, objectPools }.Any(x => x >= settings.ZoneCriticalPercent))
             return "KRITISCH";
-        if (players >= settings.ZoneScaleRecommendPercent || maps >= settings.ZoneScaleRecommendPercent || memory >= settings.ZoneScaleRecommendPercent || cpu >= settings.ZoneScaleRecommendPercent)
+        if (new[] { players, maps, memory, cpu, objectPools }.Any(x => x >= settings.ZoneScaleRecommendPercent))
             return "AUSBAU";
-        if (players >= settings.ZoneWarningPercent || maps >= settings.ZoneWarningPercent || memory >= settings.ZoneWarningPercent || cpu >= settings.ZoneWarningPercent)
+        if (new[] { players, maps, memory, cpu, objectPools }.Any(x => x >= settings.ZoneWarningPercent))
             return "WARNUNG";
         return "OK";
     }
 
-    private static string Recommend(FiestaServiceEntry zone, int configuredMaps, double players, double maps, double memory, double cpu, string trend, string pressure, AppSettings settings)
+    private static string Recommend(
+        FiestaServiceEntry zone,
+        int configuredMaps,
+        double players,
+        double maps,
+        double memory,
+        double cpu,
+        ZoneObjectPoolRuntimeSnapshot pools,
+        string trend,
+        string pressure,
+        AppSettings settings)
     {
         if (zone.State != ServiceRuntimeState.Running)
             return "Kapazität erst nach laufendem Dienst bewerten.";
@@ -210,11 +248,23 @@ public sealed class ZoneCapacityMonitor
         if (memory >= settings.ZoneWarningPercent) reasons.Add($"Privat-RAM {zone.PrivateMemoryMb:F0}/{settings.ZonePrivateMemoryBudgetMb} MB");
         if (cpu >= settings.ZoneWarningPercent) reasons.Add($"CPU-Core {cpu:F0}%");
 
+        if (pools.RuntimeVerified)
+        {
+            var playerPct = Percent(pools.PlayerCount, pools.PlayerLimit);
+            var mobPct = Percent(pools.MobCount, pools.MobLimit);
+            var npcPct = Percent(pools.NpcCount, pools.NpcLimit);
+            if (playerPct >= settings.ZoneWarningPercent) reasons.Add($"ShinePlayer {pools.PlayerCount:N0}/{pools.PlayerLimit:N0}");
+            if (mobPct >= settings.ZoneWarningPercent) reasons.Add($"ShineMob {pools.MobCount:N0}/{pools.MobLimit:N0}");
+            if (npcPct >= settings.ZoneWarningPercent) reasons.Add($"ShineNPC {pools.NpcCount:N0}/{pools.NpcLimit:N0}");
+        }
+
         if (pressure == "KRITISCH") return "Neue Zone jetzt bereitstellen und Last/Maps verlagern: " + string.Join(" · ", reasons);
         if (pressure == "AUSBAU") return "Neue Zone vorbereiten; Verlagerung planen: " + string.Join(" · ", reasons);
         if (pressure == "WARNUNG" && trend.Contains("steigend", StringComparison.OrdinalIgnoreCase))
             return "Last steigt: Zone vorsorglich planen. " + string.Join(" · ", reasons);
         if (pressure == "WARNUNG") return "Beobachten und Kapazitätsreserve prüfen: " + string.Join(" · ", reasons);
-        return "Genügend Reserve nach aktuell messbaren Laufzeitwerten.";
+        return pools.RuntimeVerified
+            ? $"Genügend Reserve. Objektpools: {pools.CompactText}."
+            : "Genügend Reserve nach aktuell messbaren Laufzeitwerten; Objektpoolbelegung nicht verifiziert.";
     }
 }

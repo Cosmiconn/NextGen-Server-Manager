@@ -1,0 +1,164 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using NextGen.Fiesta.ServerManager.Models;
+
+namespace NextGen.Fiesta.ServerManager.Services;
+
+/// <summary>
+/// Hash-bound, read-only probe for ShinePlayer/ShineMob/ShineNPC pool occupancy.
+/// No process memory is ever written by this service.
+/// </summary>
+public sealed class ZoneObjectPoolProbe
+{
+    private const int StockPlayerLimit = 1500;
+    private const int StockMobLimit = 8000;
+    private const int StockNpcLimit = 256;
+
+    // PDB/public symbol ?shineobjmanager@@3VShineObjectManager@@A
+    // preferred VA 0x132826B8, image base 0x00400000.
+    private const long ShineObjectManagerRva = 0x12E826B8;
+
+    // ShineObjectManager field layout from Zone.pdb:
+    // som_Player @ +0xAC, som_NPC @ +0xCC, som_Mob @ +0x10C.
+    // Each ShineObjectEachList derives from List<ShineObject>; l_MaxSize is +0x04
+    // and l_ListNum (live occupied slots) is +0x14.
+    private const int PlayerMaxOffset = 0xB0;
+    private const int PlayerCountOffset = 0xC0;
+    private const int NpcMaxOffset = 0xD0;
+    private const int NpcCountOffset = 0xE0;
+    private const int MobMaxOffset = 0x110;
+    private const int MobCountOffset = 0x120;
+
+    // Pool array pointers, used as an extra initialization sanity check.
+    private const int PlayerArrayOffset = 0x24;
+    private const int NpcArrayOffset = 0x28;
+    private const int MobArrayOffset = 0x30;
+
+    private const uint ProcessVmRead = 0x0010;
+    private const uint ProcessQueryInformation = 0x0400;
+
+    public ZoneObjectPoolRuntimeSnapshot Read(FiestaServiceEntry zone)
+    {
+        if (zone.State != ServiceRuntimeState.Running || !zone.ProcessId.HasValue || zone.ProcessId.Value <= 0)
+            return Unverified("Zone läuft nicht / PID nicht verfügbar");
+
+        if (!File.Exists(zone.ExecutablePath) || !HashEquals(zone.ExecutablePath, AdaptiveHookService.BaselineZoneSha256))
+            return Unverified("Zone.exe entspricht nicht dem verifizierten NA2016-Baseline-Hash");
+
+        try
+        {
+            using var process = Process.GetProcessById(zone.ProcessId.Value);
+            var moduleBase = process.MainModule?.BaseAddress ?? IntPtr.Zero;
+            if (moduleBase == IntPtr.Zero)
+                return Unverified("Zone-Modulbasis nicht lesbar");
+
+            var manager = IntPtr.Add(moduleBase, checked((int)ShineObjectManagerRva));
+            var handle = OpenProcess(ProcessVmRead | ProcessQueryInformation, false, zone.ProcessId.Value);
+            if (handle == IntPtr.Zero)
+                return Unverified("OpenProcess für Zone-Pool-Probe fehlgeschlagen");
+
+            try
+            {
+                if (!TryReadUInt32(handle, manager, PlayerArrayOffset, out var playerArray)
+                    || !TryReadUInt32(handle, manager, NpcArrayOffset, out var npcArray)
+                    || !TryReadUInt32(handle, manager, MobArrayOffset, out var mobArray))
+                    return Unverified("Zone-Pool-Arrayzeiger konnten nicht gelesen werden");
+
+                if (playerArray == 0 || npcArray == 0 || mobArray == 0)
+                    return Unverified("ShineObjectManager ist noch nicht vollständig initialisiert");
+
+                if (!TryReadUInt16(handle, manager, PlayerMaxOffset, out var playerMax)
+                    || !TryReadUInt16(handle, manager, PlayerCountOffset, out var playerCount)
+                    || !TryReadUInt16(handle, manager, NpcMaxOffset, out var npcMax)
+                    || !TryReadUInt16(handle, manager, NpcCountOffset, out var npcCount)
+                    || !TryReadUInt16(handle, manager, MobMaxOffset, out var mobMax)
+                    || !TryReadUInt16(handle, manager, MobCountOffset, out var mobCount))
+                    return Unverified("Zone-Poolzähler konnten nicht gelesen werden");
+
+                // These exact maxima are part of the structural proof for this baseline.
+                // Refuse to label data verified if the layout does not match expectation.
+                if (playerMax != StockPlayerLimit || mobMax != StockMobLimit || npcMax != StockNpcLimit)
+                    return Unverified($"Poollayout unerwartet: Player {playerMax}, Mob {mobMax}, NPC {npcMax}");
+
+                if (playerCount > playerMax || mobCount > mobMax || npcCount > npcMax)
+                    return Unverified("Poolbelegung überschreitet l_MaxSize; Layoutprüfung fehlgeschlagen");
+
+                return new ZoneObjectPoolRuntimeSnapshot
+                {
+                    RuntimeVerified = true,
+                    PlayerCount = playerCount,
+                    PlayerLimit = playerMax,
+                    MobCount = mobCount,
+                    MobLimit = mobMax,
+                    NpcCount = npcCount,
+                    NpcLimit = npcMax,
+                    Detail = "Hash-verifizierte ShineObjectManager l_ListNum Runtimezähler."
+                };
+            }
+            finally
+            {
+                CloseHandle(handle);
+            }
+        }
+        catch (Exception ex)
+        {
+            return Unverified(ex.Message);
+        }
+    }
+
+    private static ZoneObjectPoolRuntimeSnapshot Unverified(string detail) => new()
+    {
+        RuntimeVerified = false,
+        PlayerLimit = StockPlayerLimit,
+        MobLimit = StockMobLimit,
+        NpcLimit = StockNpcLimit,
+        Detail = detail
+    };
+
+    private static bool HashEquals(string path, string expected)
+    {
+        try
+        {
+            using var fs = File.OpenRead(path);
+            return Convert.ToHexString(SHA256.HashData(fs)).Equals(expected, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadUInt16(IntPtr handle, IntPtr baseAddress, int offset, out ushort value)
+    {
+        value = 0;
+        var bytes = new byte[2];
+        var address = IntPtr.Add(baseAddress, offset);
+        if (!ReadProcessMemory(handle, address, bytes, bytes.Length, out var read) || read.ToInt64() != bytes.Length)
+            return false;
+        value = BitConverter.ToUInt16(bytes, 0);
+        return true;
+    }
+
+    private static bool TryReadUInt32(IntPtr handle, IntPtr baseAddress, int offset, out uint value)
+    {
+        value = 0;
+        var bytes = new byte[4];
+        var address = IntPtr.Add(baseAddress, offset);
+        if (!ReadProcessMemory(handle, address, bytes, bytes.Length, out var read) || read.ToInt64() != bytes.Length)
+            return false;
+        value = BitConverter.ToUInt32(bytes, 0);
+        return true;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr hObject);
+}
