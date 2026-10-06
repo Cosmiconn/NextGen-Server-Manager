@@ -110,6 +110,7 @@ jobs:
         if: steps.sourcecheck.outputs.present != 'true'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -118,4 +119,8 @@ jobs:
             exit 0
           }
           git commit -m "Import tested 0.3.4 source tree"
+
+          # Another main commit may land while this workflow is extracting the ZIP.
+          # Rebase the generated import commit instead of force-pushing over it.
+          git pull --rebase origin main
           git push origin HEAD:main
