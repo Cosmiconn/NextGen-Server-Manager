@@ -248,7 +248,7 @@ public partial class MainWindow
             BrowseZoneLoadCapture();
             await Task.CompletedTask;
         }));
-        _zoneLoadCaptureCharacterBox = CreateZoneLoadTextBox(125, "Charaktername");
+        _zoneLoadCaptureCharacterBox = CreateZoneLoadTextBox(125, "Charaktername (optional; wird aus eindeutigem CH6/1 automatisch erkannt)");
         captureRow.Children.Add(_zoneLoadCaptureCharacterBox);
         captureRow.Children.Add(CreateZonePoolButton("Capture importieren", true,
             () => RunZonePoolUiActionAsync("Zone-Transfer Import", ImportZoneTransferCaptureAsync)));
@@ -396,7 +396,7 @@ public partial class MainWindow
 
         _zoneLoadStatus = new TextBlock
         {
-            Text = "Noch kein Player-Loadtest ausgeführt. Capture importieren; für Auto-Create muss der Mitschnitt zusätzlich eine echte Charaktererstellung enthalten.",
+            Text = "Noch kein Player-Loadtest ausgeführt. Capture mit 'Stop + importieren' abschließen; der Charaktername wird bei eindeutigem CH6/1 automatisch erkannt. Für Auto-Create muss der Mitschnitt zusätzlich eine echte Charaktererstellung enthalten.",
             Foreground = (Brush)FindResource("Muted"),
             FontSize = 9,
             TextWrapping = TextWrapping.Wrap
@@ -491,10 +491,14 @@ public partial class MainWindow
         var target = RequireZonePoolTarget();
         var capture = _zoneLoadCapturePathBox?.Text.Trim();
         var character = _zoneLoadCaptureCharacterBox?.Text.Trim();
+        if (_zoneLoadCaptureSession is { IsRunning: true } activeCapture)
+        {
+            throw new InvalidOperationException(
+                $"Die Capture-Datei wird noch von dumpcap geschrieben (PID {activeCapture.ProcessId}). " +
+                "Bitte zuerst 'Stop + importieren' verwenden. Eine laufende PCAPNG wird absichtlich nicht importiert.");
+        }
         if (string.IsNullOrWhiteSpace(capture) || !File.Exists(capture))
             throw new InvalidOperationException("Bitte zuerst eine vorhandene .pcap/.pcapng-Datei auswählen.");
-        if (string.IsNullOrWhiteSpace(character))
-            throw new InvalidOperationException("Bitte den Charaktername des im Mitschnitt eingeloggten Clients angeben.");
 
         var zoneName = new DirectoryInfo(Path.GetDirectoryName(target)!).Name;
         var output = Path.Combine(GetZonePoolWorkDirectory(), $"{zoneName}-zone-transfer-template.json");
@@ -515,7 +519,7 @@ public partial class MainWindow
                     CapturePath = capture,
                     OutputTemplatePath = output,
                     ZonePort = zonePort,
-                    ExpectedCharacterName = character
+                    ExpectedCharacterName = string.IsNullOrWhiteSpace(character) ? null : character
                 });
             if (!zoneResult.Success)
                 return (
@@ -539,7 +543,7 @@ public partial class MainWindow
                     CapturePath = capture,
                     OutputTemplatePath = characterCreateOutput,
                     WorldPort = clientResult.Profile.WorldPort,
-                    ExpectedCharacterName = character
+                    ExpectedCharacterName = zoneResult.CharacterName
                 });
 
             return (Zone: zoneResult, Client: clientResult, Character: characterResult);
@@ -547,6 +551,8 @@ public partial class MainWindow
 
         if (!imported.Zone.Success)
             throw new InvalidOperationException(imported.Zone.Detail);
+        if (_zoneLoadCaptureCharacterBox is not null)
+            _zoneLoadCaptureCharacterBox.Text = imported.Zone.CharacterName;
         if (imported.Client is null || !imported.Client.Success || imported.Client.Profile is null)
         {
             throw new InvalidOperationException(

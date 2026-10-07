@@ -47,7 +47,7 @@ public sealed class FiestaZoneTransferCaptureImporter
                 follow,
                 streamId,
                 options.ZonePort,
-                options.ExpectedCharacterName);
+                expectedCharacterName: null);
 
             if (parsed is not null)
                 candidates.Add(parsed);
@@ -56,7 +56,8 @@ public sealed class FiestaZoneTransferCaptureImporter
         if (candidates.Count == 0)
         {
             return FiestaZoneTransferCaptureResult.Blocked(
-                $"Keiner der {streams.Count} Zone-TCP-Streams enthielt ein vollständig entschlüsselbares CH6/1-Transferpaket.");
+                $"Keiner der {streams.Count} Zone-TCP-Streams enthielt ein vollständig entschlüsselbares CH6/1-Transferpaket. " +
+                "Der Mitschnitt muss beendet sein und den vollständigen Zone-Verbindungsaufbau inklusive SH2/7-Handshake und Client→Zone-Transfer enthalten.");
         }
 
         FiestaZoneTransferCandidate selected;
@@ -175,8 +176,8 @@ public sealed class FiestaZoneTransferCaptureImporter
                 "\t" + Convert.ToHexString(serverFrame).ToLowerInvariant() + "\n" +
                 "===================================================================\n";
 
-            var parsed = TryExtractFromFollowText(follow, 17, 9016, character)
-                         ?? throw new InvalidDataException("Synthetischer CH6/1-Transfer wurde nicht extrahiert.");
+            var parsed = TryExtractFromFollowText(follow, 17, 9016, expectedCharacterName: null)
+                         ?? throw new InvalidDataException("Synthetischer CH6/1-Transfer wurde ohne vorgegebenen Charakternamen nicht extrahiert.");
 
             if (parsed.XorPosition != xorPosition
                 || parsed.RandomId != randomId
@@ -188,7 +189,7 @@ public sealed class FiestaZoneTransferCaptureImporter
 
             return new FiestaZoneTransferCaptureSelfTestResult(
                 true,
-                "ZONE TRANSFER CAPTURE SELFTEST: PASS · tshark-follow parser, XOR und 1592-Byte CH6/1 roundtrip.");
+                "ZONE TRANSFER CAPTURE SELFTEST: PASS · tshark-follow parser, XOR, Auto-Char-Erkennung und 1592-Byte CH6/1 roundtrip.");
         }
         catch (Exception ex)
         {

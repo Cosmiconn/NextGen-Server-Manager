@@ -39,7 +39,8 @@ public partial class MainWindow
 
         row.Children.Add(CreateZonePoolButton("Interfaces", false, RefreshZoneLoadCaptureInterfacesAsync));
         row.Children.Add(CreateZonePoolButton("Capture starten", true, StartZoneLoadCaptureAsync));
-        row.Children.Add(CreateZonePoolButton("Stop + importieren", false, StopAndImportZoneLoadCaptureAsync));
+        row.Children.Add(CreateZonePoolButton("Stop + importieren", false,
+            () => RunZonePoolUiActionAsync("Capture Stop + Import", StopAndImportZoneLoadCaptureAsync)));
         stack.Children.Add(row);
 
         stack.Children.Add(new TextBlock
@@ -134,10 +135,11 @@ public partial class MainWindow
 
         SetZoneLoadStatus(
             $"CAPTURE LÄUFT · PID {session.ProcessId} · {captureInterface.DisplayName} · Filter {session.Filter}. " +
-            "Jetzt EINEN echten Testclient vollständig Login → World → Charakter → Zone durchführen; danach 'Stop + importieren'.");
+            "Jetzt EINEN echten Testclient vollständig Login → World → Charakter → Zone durchführen; danach ausschließlich 'Stop + importieren' verwenden. " +
+            "Die noch laufende PCAPNG nicht über 'Capture importieren' lesen.");
     }
 
-    private async Task StopAndImportZoneLoadCaptureAsync()
+    private async Task<string> StopAndImportZoneLoadCaptureAsync()
     {
         if (_zoneLoadCaptureSession is null)
             throw new InvalidOperationException("Keine vom Manager gestartete Capture-Session vorhanden.");
@@ -154,7 +156,16 @@ public partial class MainWindow
             throw new InvalidOperationException(stopped.Detail);
 
         SetZoneLoadStatus(stopped.Detail + " · validiere/importiere jetzt Login, World, CharacterCreate und Zone …");
-        await ImportZoneTransferCaptureAsync();
+        try
+        {
+            var detail = await ImportZoneTransferCaptureAsync();
+            return stopped.Detail + " · " + detail;
+        }
+        catch (Exception ex)
+        {
+            SetZoneLoadStatus("CAPTURE IMPORT FEHLER: " + ex.Message);
+            throw;
+        }
     }
 
     private void EnsureZoneLoadCaptureCloseHook()
