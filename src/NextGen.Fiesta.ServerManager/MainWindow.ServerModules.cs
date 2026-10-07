@@ -197,6 +197,7 @@ public partial class MainWindow
     {
         var root = new Grid { Margin = new Thickness(0, 10, 0, 0) };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0.9, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1.1, GridUnitType.Star) });
 
@@ -206,6 +207,10 @@ public partial class MainWindow
             "Weniger Zonen, mehr Leistung pro Prozess – CPU/Mainthread und Speichergrenzen getrennt bewerten",
             ("\uE72C", "Performance neu analysieren", "AnalyzePerformanceTuningCommand", true));
         root.Children.Add(header);
+
+        var affinity = CreateCpuAffinityCard();
+        Grid.SetRow(affinity, 1);
+        root.Children.Add(affinity);
 
         var processes = CreateModuleTableCard("Prozess-Skalierung", "ProcessScaling", table =>
         {
@@ -221,7 +226,7 @@ public partial class MainWindow
             table.Columns.Add(ModuleTextColumn("Vertikale Reserve", "VerticalHeadroom", 150));
             table.Columns.Add(ModuleTextColumn("Empfehlung", "Recommendation", new DataGridLength(1, DataGridLengthUnitType.Star)));
         }, "PerformanceTuningSummary");
-        Grid.SetRow(processes, 1);
+        Grid.SetRow(processes, 2);
         root.Children.Add(processes);
 
         var candidates = CreateModuleTableCard("Tuning-Kandidaten / geplante Zielgrößen", "PerformanceTuningCandidates", table =>
@@ -236,9 +241,98 @@ public partial class MainWindow
             table.Columns.Add(ModuleTextColumn("Wirkung", "Impact", 270));
             table.Columns.Add(ModuleTextColumn("Beleg", "Evidence", new DataGridLength(1, DataGridLengthUnitType.Star)));
         });
-        Grid.SetRow(candidates, 2);
+        Grid.SetRow(candidates, 3);
         root.Children.Add(candidates);
         tab.Content = root;
+    }
+
+    private Border CreateCpuAffinityCard()
+    {
+        var card = new Border
+        {
+            Style = (Style)FindResource("CardBorder"),
+            Padding = new Thickness(10, 8, 10, 8),
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(145) });
+
+        var actions = new DockPanel { LastChildFill = true };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var analyze = new Button { Content = "Affinity-Plan prüfen", Padding = new Thickness(10, 5, 10, 5), Margin = new Thickness(4, 0, 0, 0) };
+        analyze.SetBinding(Button.CommandProperty, new Binding("AnalyzeCpuAffinityCommand"));
+        var apply = new Button
+        {
+            Content = "Affinity anwenden",
+            Padding = new Thickness(10, 5, 10, 5),
+            Margin = new Thickness(4, 0, 0, 0),
+            Style = (Style)FindResource("PrimaryActionButton")
+        };
+        apply.SetBinding(Button.CommandProperty, new Binding("ApplyCpuAffinityCommand"));
+        buttons.Children.Add(analyze);
+        buttons.Children.Add(apply);
+        DockPanel.SetDock(buttons, Dock.Right);
+        actions.Children.Add(buttons);
+
+        var title = new StackPanel();
+        title.Children.Add(new TextBlock { Text = "CPU-Affinity / NUMA", FontSize = 14, FontWeight = FontWeights.SemiBold });
+        title.Children.Add(new TextBlock
+        {
+            Text = "Physische Cores statt SMT-Schein-Cores: Zone/World/Login/Character werden getrennt und node-lokal geplant.",
+            Foreground = (Brush)FindResource("Muted"),
+            FontSize = 10,
+            TextWrapping = TextWrapping.Wrap
+        });
+        actions.Children.Add(title);
+        grid.Children.Add(actions);
+
+        var optionRow = new DockPanel { Margin = new Thickness(0, 6, 0, 6) };
+        var auto = new CheckBox
+        {
+            Content = "Nach Service-/Prozess-Neustart automatisch erneut anwenden",
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0)
+        };
+        auto.SetBinding(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty,
+            new Binding("AutoApplyCpuAffinity") { Mode = BindingMode.TwoWay });
+        DockPanel.SetDock(auto, Dock.Left);
+        optionRow.Children.Add(auto);
+        var summary = new TextBlock
+        {
+            Foreground = (Brush)FindResource("Muted"),
+            FontSize = 10,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        summary.SetBinding(TextBlock.TextProperty, new Binding("CpuAffinitySummary"));
+        optionRow.Children.Add(summary);
+        Grid.SetRow(optionRow, 1);
+        grid.Children.Add(optionRow);
+
+        var table = new DataGrid
+        {
+            AlternationCount = 2,
+            IsReadOnly = true,
+            RowHeight = 27,
+            ColumnHeaderHeight = 29,
+            BorderThickness = new Thickness(0, 1, 0, 0)
+        };
+        table.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("CpuAffinityPlan"));
+        table.Columns.Add(ModuleTextColumn("Prozess", "Component", 125));
+        table.Columns.Add(ModuleTextColumn("PID", "ProcessId", 65));
+        table.Columns.Add(ModuleTextColumn("CPUs", "CpuSet", 180));
+        table.Columns.Add(ModuleTextColumn("NUMA", "Numa", 65));
+        table.Columns.Add(ModuleTextColumn("Aktuell", "CurrentAffinity", 180));
+        table.Columns.Add(ModuleTextColumn("Status", "Status", new DataGridLength(1, DataGridLengthUnitType.Star)));
+        ScrollViewer.SetHorizontalScrollBarVisibility(table, ScrollBarVisibility.Auto);
+        ScrollViewer.SetVerticalScrollBarVisibility(table, ScrollBarVisibility.Auto);
+        Grid.SetRow(table, 2);
+        grid.Children.Add(table);
+
+        card.Child = grid;
+        return card;
     }
 
     private Button CreateHookProfileButton(string label, string parameter, bool primary = false)
