@@ -89,6 +89,11 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(identitySelfTest.Detail);
             Log("LOAD_IDENTITY_SELFTEST PASS · " + identitySelfTest.Detail);
 
+            var loadRampTimingSelfTest = FiestaLoadRampOptions.RunTimingSelfTest();
+            if (!loadRampTimingSelfTest.Success)
+                throw new InvalidOperationException(loadRampTimingSelfTest.Detail);
+            Log("LOAD_RAMP_TIMING_SELFTEST PASS · " + loadRampTimingSelfTest.Detail);
+
             var listenerRewriteSelfTest = ZoneClientListenerTestConfiguration.RunRewriteSelfTest();
             if (!listenerRewriteSelfTest.Success)
                 throw new InvalidOperationException(listenerRewriteSelfTest.Detail);

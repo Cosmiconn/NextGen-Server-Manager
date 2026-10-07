@@ -431,10 +431,107 @@ public sealed class FiestaLoadRampOptions
             throw new ArgumentException("Rampenzeiten enthalten ungültige Werte.");
         }
 
-        if (SessionHoldDuration <= StageReadyTimeout + FinalStabilityDuration)
-            throw new ArgumentException("SessionHoldDuration muss länger als StageReadyTimeout + FinalStabilityDuration sein.");
+        var requiredHold = CalculateRequiredSessionHoldDuration();
+        if (SessionHoldDuration <= requiredHold)
+        {
+            throw new ArgumentException(
+                $"SessionHoldDuration {SessionHoldDuration:c} ist zu kurz; für diese Rampenkonfiguration werden " +
+                $"mehr als {requiredHold:c} benötigt.");
+        }
+    }
+
+    internal TimeSpan CalculateRequiredSessionHoldDuration()
+    {
+        var targets = StageTargets
+            .Distinct()
+            .OrderBy(x => x)
+            .ToArray();
+        if (targets.Length == 0)
+            return TimeSpan.Zero;
+
+        // HoldDuration starts only after a client has reached ClientReady.
+        // For the first stage {1}, StageReadyTimeout therefore must not be charged against
+        // that client's hold time. It does need to survive all later ramp stages, settle
+        // windows and the final stability interval. For a first stage >1, one readiness
+        // window is still required for the remaining clients of that first stage.
+        var finalTarget = targets[^1];
+        var remainingClientStarts = Math.Max(0, finalTarget - 1);
+        var remainingReadyWindows =
+            Math.Max(0, targets.Length - 1) +
+            (targets[0] > 1 ? 1 : 0);
+
+        var clientStartSpread = TimeSpan.FromTicks(
+            checked(ClientStartInterval.Ticks * (long)remainingClientStarts));
+        var readyBudget = TimeSpan.FromTicks(
+            checked(StageReadyTimeout.Ticks * (long)remainingReadyWindows));
+        var settleBudget = TimeSpan.FromTicks(
+            checked(StageSettleTime.Ticks * (long)targets.Length));
+
+        return clientStartSpread
+               + readyBudget
+               + settleBudget
+               + FinalStabilityDuration
+               + ReadyPollInterval
+               + StabilityPollInterval;
+    }
+
+    public static FiestaLoadRampTimingSelfTestResult RunTimingSelfTest()
+    {
+        try
+        {
+            var single = new FiestaLoadRampOptions
+            {
+                StageTargets = new[] { 1 },
+                ClientStartInterval = TimeSpan.Zero,
+                StageReadyTimeout = TimeSpan.FromMinutes(5),
+                ReadyPollInterval = TimeSpan.FromMilliseconds(500),
+                StageSettleTime = TimeSpan.FromSeconds(3),
+                SessionHoldDuration = TimeSpan.FromMinutes(7),
+                FinalStabilityDuration = TimeSpan.FromMinutes(5),
+                StabilityPollInterval = TimeSpan.FromSeconds(5)
+            };
+            var singleRequired = single.CalculateRequiredSessionHoldDuration();
+            if (single.SessionHoldDuration <= singleRequired
+                || singleRequired >= TimeSpan.FromMinutes(6))
+            {
+                throw new InvalidDataException(
+                    $"1-Client-Timing falsch: required={singleRequired:c}, hold={single.SessionHoldDuration:c}.");
+            }
+
+            var ramp = new FiestaLoadRampOptions
+            {
+                StageTargets = new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 },
+                ClientStartInterval = TimeSpan.FromMilliseconds(50),
+                StageReadyTimeout = TimeSpan.FromMinutes(5),
+                ReadyPollInterval = TimeSpan.FromMilliseconds(500),
+                StageSettleTime = TimeSpan.FromSeconds(10),
+                SessionHoldDuration = TimeSpan.FromHours(1),
+                FinalStabilityDuration = TimeSpan.FromMinutes(5),
+                StabilityPollInterval = TimeSpan.FromSeconds(5)
+            };
+            var rampRequired = ramp.CalculateRequiredSessionHoldDuration();
+            if (ramp.SessionHoldDuration <= rampRequired
+                || rampRequired <= TimeSpan.FromMinutes(40))
+            {
+                throw new InvalidDataException(
+                    $"1600er-Ramp-Timing falsch: required={rampRequired:c}, hold={ramp.SessionHoldDuration:c}.");
+            }
+
+            return new FiestaLoadRampTimingSelfTestResult(
+                true,
+                $"LOAD RAMP TIMING SELFTEST: PASS · 1 Client benötigt {singleRequired:c} < 00:07:00 · " +
+                $"1600er Ramp benötigt {rampRequired:c} < 01:00:00.");
+        }
+        catch (Exception ex)
+        {
+            return new FiestaLoadRampTimingSelfTestResult(
+                false,
+                "LOAD RAMP TIMING SELFTEST: FAIL · " + ex.Message);
+        }
     }
 }
+
+public readonly record struct FiestaLoadRampTimingSelfTestResult(bool Success, string Detail);
 
 public sealed class FiestaLoadCredentialManifest
 {
