@@ -253,17 +253,6 @@ public partial class MainWindow : Window
             FontSize = 14,
             Margin = new Thickness(0, 2, 0, 0)
         });
-        titleArea.MouseLeftButtonDown += (_, e) =>
-        {
-            if (e.ClickCount == 2)
-            {
-                ToggleMaximize();
-            }
-            else
-            {
-                try { DragMove(); } catch { /* window state can change during drag */ }
-            }
-        };
         Grid.SetColumn(titleArea, 1);
         grid.Children.Add(titleArea);
 
@@ -343,8 +332,56 @@ public partial class MainWindow : Window
         captionButtons.Children.Add(close);
         grid.Children.Add(captionButtons);
 
+        header.MouseLeftButtonDown += OnCustomHeaderMouseLeftButtonDown;
         header.Child = grid;
         return header;
+    }
+
+    private void OnCustomHeaderMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left || IsInteractiveHeaderSource(e.OriginalSource as DependencyObject))
+            return;
+
+        if (e.ClickCount == 2)
+        {
+            ToggleMaximize();
+            e.Handled = true;
+            return;
+        }
+
+        try
+        {
+            if (WindowState == WindowState.Maximized)
+                WindowState = WindowState.Normal;
+            DragMove();
+            e.Handled = true;
+        }
+        catch
+        {
+            // Remote/pen input can change window state while a drag is already in progress.
+        }
+    }
+
+    private static bool IsInteractiveHeaderSource(DependencyObject? source)
+    {
+        for (var current = source; current is not null; current = GetHeaderParent(current))
+        {
+            if (current is ButtonBase
+                or TextBoxBase
+                or ComboBox
+                or Slider
+                or ScrollBar)
+                return true;
+        }
+        return false;
+    }
+
+    private static DependencyObject? GetHeaderParent(DependencyObject child)
+    {
+        if (child is FrameworkContentElement content)
+            return content.Parent;
+        try { return VisualTreeHelper.GetParent(child); }
+        catch { return null; }
     }
 
     private FrameworkElement CreateServerLogo()
