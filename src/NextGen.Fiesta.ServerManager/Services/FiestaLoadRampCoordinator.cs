@@ -355,6 +355,11 @@ public sealed class FiestaLoadRampCoordinator
             .Select(x => $"{x.Key}: {x.Value}")
             .ToArray();
 
+        var lastPassed = stages.LastOrDefault(x => x.Passed)?.TargetClients ?? 0;
+        var capacityContext = lastPassed > 0
+            ? $" · Letzte sauber serverseitig verifizierte Stufe: {lastPassed:N0} · Ready bei Abbruch: {readyCount:N0}"
+            : $" · Noch keine Laststufe serverseitig verifiziert · Ready bei Abbruch: {readyCount:N0}";
+
         return new FiestaLoadRampResult
         {
             Blocked = true,
@@ -365,8 +370,8 @@ public sealed class FiestaLoadRampCoordinator
             FailedClientCount = failed.Count,
             FailedClientSamples = failures,
             Detail = failed.Count == 0
-                ? "LOAD RAMP BLOCKED · " + detail
-                : "LOAD RAMP BLOCKED · " + detail + " · " + string.Join(" | ", failures)
+                ? "LOAD RAMP BLOCKED · " + detail + capacityContext
+                : "LOAD RAMP BLOCKED · " + detail + capacityContext + " · " + string.Join(" | ", failures)
         };
     }
 
@@ -395,11 +400,18 @@ public sealed class FiestaLoadRampCoordinator
 
 public sealed class FiestaLoadRampOptions
 {
+    // The diagnostic ramp deliberately closes the huge 100 -> 500 gap. The current
+    // original-server evidence shows that failures can first appear somewhere inside
+    // that interval, so the certification run must preserve the last known clean level.
+    public static IReadOnlyList<int> DiagnosticStageTargets { get; } =
+        new[] { 1, 10, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500,
+                600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400,
+                1450, 1500, 1510, 1550, 1600 };
+
     public string TargetZoneExePath { get; init; } = string.Empty;
     public string CredentialManifestPath { get; init; } = string.Empty;
     public FiestaHeadlessProbeOptions ClientOptions { get; init; } = new();
-    public IReadOnlyList<int> StageTargets { get; init; } =
-        new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 };
+    public IReadOnlyList<int> StageTargets { get; init; } = DiagnosticStageTargets;
     public bool RequireEmptyBaseline { get; init; } = true;
     public TimeSpan ClientStartInterval { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan StageReadyTimeout { get; init; } = TimeSpan.FromMinutes(8);
@@ -540,9 +552,9 @@ public sealed class FiestaLoadRampOptions
 
             var ramp = new FiestaLoadRampOptions
             {
-                StageTargets = new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 },
+                StageTargets = DiagnosticStageTargets,
                 ClientStartInterval = TimeSpan.FromSeconds(1),
-                StageReadyTimeout = TimeSpan.FromMinutes(8),
+                StageReadyTimeout = TimeSpan.FromMinutes(3),
                 ReadyPollInterval = TimeSpan.FromMilliseconds(500),
                 StageSettleTime = TimeSpan.FromSeconds(10),
                 SessionHoldDuration = TimeSpan.FromHours(2),
@@ -551,17 +563,24 @@ public sealed class FiestaLoadRampOptions
             };
             var rampRequired = ramp.CalculateRequiredSessionHoldDuration();
             if (ramp.SessionHoldDuration <= rampRequired
-                || rampRequired <= TimeSpan.FromMinutes(80)
+                || rampRequired <= TimeSpan.FromMinutes(100)
                 || rampRequired >= TimeSpan.FromHours(2))
             {
                 throw new InvalidDataException(
-                    $"1600er-Ramp-Timing falsch: required={rampRequired:c}, hold={ramp.SessionHoldDuration:c}.");
+                    $"1600er-Diagnoseramp-Timing falsch: required={rampRequired:c}, hold={ramp.SessionHoldDuration:c}.");
+            }
+
+            if (DiagnosticStageTargets.Zip(DiagnosticStageTargets.Skip(1), (a, b) => b - a)
+                .TakeWhile((_, index) => DiagnosticStageTargets[index] < 500)
+                .Any(step => step > 100))
+            {
+                throw new InvalidDataException("Diagnoseramp enthält unterhalb 500 weiterhin eine zu große Laststufen-Lücke.");
             }
 
             return new FiestaLoadRampTimingSelfTestResult(
                 true,
                 $"LOAD RAMP TIMING SELFTEST: PASS · 1 Client benötigt {singleRequired:c} < 00:07:00 · " +
-                $"1600er Ramp mit 1-s Admission/8-min Ready-Budget benötigt {rampRequired:c} < 02:00:00.");
+                $"1600er Diagnoseramp mit feinen Stufen/1-s Admission/3-min Ready-Budget benötigt {rampRequired:c} < 02:00:00.");
         }
         catch (Exception ex)
         {
