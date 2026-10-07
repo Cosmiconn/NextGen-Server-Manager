@@ -716,6 +716,18 @@ public sealed class FiestaHeadlessLoadClient
         bool allowRemoteClose,
         CancellationToken cancellationToken)
     {
+        var heartbeatReplies = 0;
+        DateTimeOffset? lastHeartbeatRequestUtc = null;
+
+        string HeartbeatTelemetry()
+        {
+            if (heartbeatReplies == 0 || lastHeartbeatRequestUtc is null)
+                return "kein SH2/4-Heartbeat empfangen/beantwortet";
+
+            var age = Math.Max(0, (DateTimeOffset.UtcNow - lastHeartbeatRequestUtc.Value).TotalSeconds);
+            return $"{heartbeatReplies:N0} SH2/4→CH2/5 Heartbeat(s), letzter vor {age:N1}s";
+        }
+
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -731,13 +743,15 @@ public sealed class FiestaHeadlessLoadClient
                         5,
                         ReadOnlyMemory<byte>.Empty,
                         cancellationToken);
+                    heartbeatReplies++;
+                    lastHeartbeatRequestUtc = DateTimeOffset.UtcNow;
                     continue;
                 }
 
                 if (packet.Header == 4 && packet.Type == 2)
                 {
                     throw new InvalidOperationException(
-                        $"{role} meldete SH4/2 ConnectError während des Haltens.");
+                        $"{role} meldete SH4/2 ConnectError während des Haltens · {HeartbeatTelemetry()}.");
                 }
 
                 // Drain non-heartbeat traffic so the TCP receive window remains healthy.
@@ -757,7 +771,7 @@ public sealed class FiestaHeadlessLoadClient
             catch (EndOfStreamException ex)
             {
                 throw new EndOfStreamException(
-                    $"{role}: Fiesta-Verbindung wurde vom Server geschlossen.",
+                    $"{role}: Fiesta-Verbindung wurde vom Server geschlossen · {HeartbeatTelemetry()}.",
                     ex);
             }
         }
