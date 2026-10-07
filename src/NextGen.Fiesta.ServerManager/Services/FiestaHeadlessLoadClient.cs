@@ -330,6 +330,14 @@ public sealed class FiestaHeadlessLoadClient
                     "Initial-World-Retry darf nur für r_-Accounts und nur begrenzt aktiv sein.");
             }
 
+            if (!IsTransientInitialWorldTransportFailure(new TimeoutException())
+                || !IsTransientInitialWorldTransportFailure(new EndOfStreamException())
+                || IsTransientInitialWorldTransportFailure(new InvalidDataException()))
+            {
+                throw new InvalidDataException(
+                    "Initial-World-Transportklassifizierung ist zu breit oder zu eng.");
+            }
+
             var retry1 = GetInitialWorldTransferRetryDelay("r_ngl000002", 1);
             var retry2 = GetInitialWorldTransferRetryDelay("r_ngl000002", 2);
             if (retry1 < TimeSpan.FromMilliseconds(500)
@@ -342,7 +350,7 @@ public sealed class FiestaHeadlessLoadClient
 
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2 bounded retry+jitter · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone CH6/1→SH6/2→CH6/3 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2/Timeout/RemoteClose bounded retry+jitter vor SH3/20 · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone CH6/1→SH6/2→CH6/3 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
@@ -404,6 +412,12 @@ public sealed class FiestaHeadlessLoadClient
         setStage(FiestaLoadClientStage.WorldRedirectReceived, string.Empty);
         return world;
     }
+
+    private static bool IsTransientInitialWorldTransportFailure(Exception ex)
+        => ex is TimeoutException
+           or EndOfStreamException
+           or IOException
+           or SocketException;
 
     private static bool ShouldRetryInitialWorldTransfer(string username, int attempt)
         => username.StartsWith("r_", StringComparison.OrdinalIgnoreCase)
@@ -486,23 +500,38 @@ public sealed class FiestaHeadlessLoadClient
         FiestaWireConnection? worldConnection = null;
         try
         {
-            worldConnection = await FiestaWireConnection.ConnectAsync(
-                world.Host,
-                world.Port,
-                options.StepTimeout,
-                cancellationToken);
-            setStage(FiestaLoadClientStage.WorldConnected, string.Empty);
+            FiestaPacket characterListPacket;
+            try
+            {
+                worldConnection = await FiestaWireConnection.ConnectAsync(
+                    world.Host,
+                    world.Port,
+                    options.StepTimeout,
+                    cancellationToken);
+                setStage(FiestaLoadClientStage.WorldConnected, string.Empty);
 
-            await worldConnection.SendPacketAsync(
-                3,
-                15,
-                BuildWorldTransferBody(options, clientProfile, credential.Username, world.TransferMaterial),
-                cancellationToken);
+                await worldConnection.SendPacketAsync(
+                    3,
+                    15,
+                    BuildWorldTransferBody(options, clientProfile, credential.Username, world.TransferMaterial),
+                    cancellationToken);
 
-            var characterListPacket = await WaitForInitialWorldCharacterListAsync(
-                worldConnection,
-                options.StepTimeout,
-                cancellationToken);
+                characterListPacket = await WaitForInitialWorldCharacterListAsync(
+                    worldConnection,
+                    options.StepTimeout,
+                    cancellationToken);
+            }
+            catch (FiestaInitialWorldTransferRejectedException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (IsTransientInitialWorldTransportFailure(ex))
+            {
+                throw new FiestaInitialWorldTransferRejectedException(
+                    $"Initialer World-Handoff wurde vor SH3/20 unterbrochen: {ex.Message}",
+                    ex);
+            }
+
             var characterList = ParseCharacterList(characterListPacket.Body);
 
             // Real capture sends CH2/13 GameTime immediately after SH3/20 and receives SH2/14
@@ -1051,6 +1080,11 @@ public sealed class FiestaHeadlessLoadClient
     {
         public FiestaInitialWorldTransferRejectedException(string message)
             : base(message)
+        {
+        }
+
+        public FiestaInitialWorldTransferRejectedException(string message, Exception innerException)
+            : base(message, innerException)
         {
         }
     }

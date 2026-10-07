@@ -684,16 +684,17 @@ public partial class MainWindow
                         !string.IsNullOrWhiteSpace(characterCreateTemplate) && File.Exists(characterCreateTemplate)
                             ? characterCreateTemplate
                             : null,
-                    StepTimeout = TimeSpan.FromSeconds(15),
-                    ZoneLoginTimeout = TimeSpan.FromSeconds(30),
-                    HoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(1)
+                    StepTimeout = singleClientOnly ? TimeSpan.FromSeconds(15) : TimeSpan.FromSeconds(60),
+                    ZoneLoginTimeout = singleClientOnly ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(90),
+                    HoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(2)
                 },
                 StageTargets = singleClientOnly
                     ? new[] { 1 }
                     : new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 },
-                ClientStartInterval = singleClientOnly ? TimeSpan.Zero : TimeSpan.FromMilliseconds(200),
+                ClientStartInterval = singleClientOnly ? TimeSpan.Zero : TimeSpan.FromSeconds(1),
+                StageReadyTimeout = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(8),
                 StageSettleTime = singleClientOnly ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(10),
-                SessionHoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(1),
+                SessionHoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(2),
                 FinalStabilityDuration = TimeSpan.FromMinutes(5),
                 StabilityPollInterval = TimeSpan.FromSeconds(5)
             };
@@ -711,7 +712,7 @@ public partial class MainWindow
 
             SetZoneLoadStatus(singleClientOnly
                 ? "1-Client-Probe läuft 5 Minuten: Login → World → Zone → ShinePlayer + Log-Audit …"
-                : "Load-Ramp läuft: 1 → 10 → 100 → 500 → 1000 → 1450 → 1510 → 1600 · 200-ms Starttakt · r_-World-Retry bei transientem SH4/2 · 5-Min-Stabilität + Log-Audit …");
+                : "Load-Ramp läuft: 1 → 10 → 100 → 500 → 1000 → 1450 → 1510 → 1600 · 1-s Starttakt · StepTimeout 60 s · r_-World-Retry nur vor SH3/20 bei SH4/2/Timeout/RemoteClose · 5-Min-Stabilität + Log-Audit …");
 
             var result = await new FiestaLoadRampCoordinator().RunAsync(
                 options,
