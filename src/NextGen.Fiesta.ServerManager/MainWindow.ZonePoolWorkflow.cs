@@ -691,7 +691,7 @@ public partial class MainWindow
                 StageTargets = singleClientOnly
                     ? new[] { 1 }
                     : new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 },
-                ClientStartInterval = singleClientOnly ? TimeSpan.Zero : TimeSpan.FromMilliseconds(50),
+                ClientStartInterval = singleClientOnly ? TimeSpan.Zero : TimeSpan.FromMilliseconds(200),
                 StageSettleTime = singleClientOnly ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(10),
                 SessionHoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(1),
                 FinalStabilityDuration = TimeSpan.FromMinutes(5),
@@ -711,7 +711,7 @@ public partial class MainWindow
 
             SetZoneLoadStatus(singleClientOnly
                 ? "1-Client-Probe läuft 5 Minuten: Login → World → Zone → ShinePlayer + Log-Audit …"
-                : "Load-Ramp läuft: 1 → 10 → 100 → 500 → 1000 → 1450 → 1510 → 1600 + 5-Min-Stabilität + Log-Audit …");
+                : "Load-Ramp läuft: 1 → 10 → 100 → 500 → 1000 → 1450 → 1510 → 1600 · 200-ms Starttakt · r_-World-Retry bei transientem SH4/2 · 5-Min-Stabilität + Log-Audit …");
 
             var result = await new FiestaLoadRampCoordinator().RunAsync(
                 options,

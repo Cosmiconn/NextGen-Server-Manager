@@ -14,6 +14,7 @@ namespace NextGen.Fiesta.ServerManager.Services;
 public sealed class FiestaHeadlessLoadClient
 {
     private static readonly TimeSpan DefaultStepTimeout = TimeSpan.FromSeconds(15);
+    private const int InitialWorldTransferMaxAttempts = 5;
 
     public async Task<FiestaHeadlessProbeResult> ProbeAndHoldAsync(
         FiestaHeadlessProbeOptions options,
@@ -59,23 +60,46 @@ public sealed class FiestaHeadlessLoadClient
             // resolved from the new SH3/20 CharacterList before CH4/1 is sent.
             for (var worldPass = 0; worldPass < 2 && zone is null; worldPass++)
             {
-                var world = await LoginAndGetWorldRedirectAsync(
-                    options,
-                    credential,
-                    passwordMd5,
-                    clientProfile,
-                    cancellationToken,
-                    SetStage);
-                finalWorld = world;
+                FiestaWorldEntryResult? worldResult = null;
 
-                var worldResult = await PrepareWorldEntryAsync(
-                    world,
-                    options,
-                    credential,
-                    clientProfile,
-                    allowCharacterCreate: worldPass == 0,
-                    cancellationToken,
-                    SetStage);
+                for (var attempt = 1; attempt <= InitialWorldTransferMaxAttempts; attempt++)
+                {
+                    var world = await LoginAndGetWorldRedirectAsync(
+                        options,
+                        credential,
+                        passwordMd5,
+                        clientProfile,
+                        cancellationToken,
+                        SetStage);
+                    finalWorld = world;
+
+                    try
+                    {
+                        worldResult = await PrepareWorldEntryAsync(
+                            world,
+                            options,
+                            credential,
+                            clientProfile,
+                            allowCharacterCreate: worldPass == 0,
+                            cancellationToken,
+                            SetStage);
+                        break;
+                    }
+                    catch (FiestaInitialWorldTransferRejectedException ex)
+                        when (ShouldRetryInitialWorldTransfer(credential.Username, attempt))
+                    {
+                        var delay = GetInitialWorldTransferRetryDelay(
+                            credential.Username,
+                            attempt);
+                        SetStage(
+                            FiestaLoadClientStage.WorldConnected,
+                            $"Transienter SH4/2 beim ersten World-Handoff · Retry {attempt + 1}/{InitialWorldTransferMaxAttempts} in {delay.TotalMilliseconds:N0} ms · {ex.Message}");
+                        await Task.Delay(delay, cancellationToken);
+                    }
+                }
+
+                if (worldResult is null)
+                    throw new InvalidOperationException("World-Handoff lieferte nach den zulässigen Versuchen kein Ergebnis.");
 
                 randomId = worldResult.RandomId;
                 characterCount = worldResult.CharacterCount;
@@ -298,9 +322,27 @@ public sealed class FiestaHeadlessLoadClient
                     "Post-ClientReady Remote-Close-Policy muss World tolerieren und Zone blockieren.");
             }
 
+            if (!ShouldRetryInitialWorldTransfer("r_ngl000002", 1)
+                || ShouldRetryInitialWorldTransfer("r_ngl000002", InitialWorldTransferMaxAttempts)
+                || ShouldRetryInitialWorldTransfer("ngl000002", 1))
+            {
+                throw new InvalidDataException(
+                    "Initial-World-Retry darf nur für r_-Accounts und nur begrenzt aktiv sein.");
+            }
+
+            var retry1 = GetInitialWorldTransferRetryDelay("r_ngl000002", 1);
+            var retry2 = GetInitialWorldTransferRetryDelay("r_ngl000002", 2);
+            if (retry1 < TimeSpan.FromMilliseconds(500)
+                || retry1 > TimeSpan.FromMilliseconds(900)
+                || retry2 <= retry1)
+            {
+                throw new InvalidDataException(
+                    $"Initial-World-Retry-Backoff ist ungültig: {retry1.TotalMilliseconds:N0}/{retry2.TotalMilliseconds:N0} ms.");
+            }
+
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone CH6/1→SH6/2→CH6/3 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2 bounded retry+jitter · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone CH6/1→SH6/2→CH6/3 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
@@ -363,6 +405,75 @@ public sealed class FiestaHeadlessLoadClient
         return world;
     }
 
+    private static bool ShouldRetryInitialWorldTransfer(string username, int attempt)
+        => username.StartsWith("r_", StringComparison.OrdinalIgnoreCase)
+           && attempt < InitialWorldTransferMaxAttempts;
+
+    private static TimeSpan GetInitialWorldTransferRetryDelay(string username, int attempt)
+    {
+        if (attempt <= 0)
+            throw new ArgumentOutOfRangeException(nameof(attempt));
+
+        // Deterministic per-account jitter prevents nine freshly auto-registered clients from
+        // retrying the World handoff in lockstep after the same SH4/2 response.
+        var jitterBucket = username.Aggregate(0, (sum, ch) => (sum + ch) % 5);
+        var milliseconds =
+            500
+            + ((attempt - 1) * 500)
+            + (jitterBucket * 100);
+        return TimeSpan.FromMilliseconds(milliseconds);
+    }
+
+    private static async Task<FiestaPacket> WaitForInitialWorldCharacterListAsync(
+        FiestaWireConnection connection,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            var packet = await connection.ReadPacketAsync(remaining, cancellationToken);
+
+            if (packet.Header == 2 && packet.Type == 4)
+            {
+                await connection.SendPacketAsync(
+                    2,
+                    5,
+                    ReadOnlyMemory<byte>.Empty,
+                    cancellationToken);
+                continue;
+            }
+
+            if (packet.Header == 3 && packet.Type == 9)
+                throw new InvalidOperationException("Login/World meldete SH3/9 Error.");
+
+            if (packet.Header == 4 && packet.Type == 2)
+            {
+                var body = packet.Body.Length == 0
+                    ? "<leer>"
+                    : Convert.ToHexString(packet.Body);
+                throw new FiestaInitialWorldTransferRejectedException(
+                    $"World meldete SH4/2 vor SH3/20 CharacterList (Body={body}).");
+            }
+
+            if (packet.Header == 5 && packet.Type == 4)
+            {
+                var code = packet.Body.Length >= 2
+                    ? BinaryPrimitives.ReadUInt16LittleEndian(packet.Body.AsSpan(0, 2))
+                    : 0;
+                throw new InvalidOperationException(
+                    $"World meldete SH5/4 CharacterCreationError ({code}).");
+            }
+
+            if (packet.Header == 3 && packet.Type == 20)
+                return packet;
+        }
+
+        throw new TimeoutException(
+            $"SH3/20 CharacterList wurde innerhalb von {timeout.TotalSeconds:N0}s nicht empfangen.");
+    }
+
     private static async Task<FiestaWorldEntryResult> PrepareWorldEntryAsync(
         FiestaEndpointRedirect world,
         FiestaHeadlessProbeOptions options,
@@ -388,10 +499,8 @@ public sealed class FiestaHeadlessLoadClient
                 BuildWorldTransferBody(options, clientProfile, credential.Username, world.TransferMaterial),
                 cancellationToken);
 
-            var characterListPacket = await WaitForAsync(
+            var characterListPacket = await WaitForInitialWorldCharacterListAsync(
                 worldConnection,
-                3,
-                20,
                 options.StepTimeout,
                 cancellationToken);
             var characterList = ParseCharacterList(characterListPacket.Body);
@@ -936,6 +1045,14 @@ public sealed class FiestaHeadlessLoadClient
         var zero = source.IndexOf((byte)0);
         if (zero >= 0) source = source[..zero];
         return Encoding.ASCII.GetString(source).Trim();
+    }
+
+    private sealed class FiestaInitialWorldTransferRejectedException : InvalidOperationException
+    {
+        public FiestaInitialWorldTransferRejectedException(string message)
+            : base(message)
+        {
+        }
     }
 
     private sealed record FiestaOutboundPacket(int Header, int Type, byte[] Body);

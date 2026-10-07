@@ -401,7 +401,7 @@ public sealed class FiestaLoadRampOptions
     public IReadOnlyList<int> StageTargets { get; init; } =
         new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 };
     public bool RequireEmptyBaseline { get; init; } = true;
-    public TimeSpan ClientStartInterval { get; init; } = TimeSpan.FromMilliseconds(50);
+    public TimeSpan ClientStartInterval { get; init; } = TimeSpan.FromMilliseconds(200);
     public TimeSpan StageReadyTimeout { get; init; } = TimeSpan.FromMinutes(5);
     public TimeSpan ReadyPollInterval { get; init; } = TimeSpan.FromMilliseconds(500);
     public TimeSpan StageSettleTime { get; init; } = TimeSpan.FromSeconds(10);
@@ -541,7 +541,7 @@ public sealed class FiestaLoadRampOptions
             var ramp = new FiestaLoadRampOptions
             {
                 StageTargets = new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 },
-                ClientStartInterval = TimeSpan.FromMilliseconds(50),
+                ClientStartInterval = TimeSpan.FromMilliseconds(200),
                 StageReadyTimeout = TimeSpan.FromMinutes(5),
                 ReadyPollInterval = TimeSpan.FromMilliseconds(500),
                 StageSettleTime = TimeSpan.FromSeconds(10),
