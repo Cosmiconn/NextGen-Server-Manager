@@ -808,3 +808,8 @@ public sealed class FiestaClientCaptureProfileResult
 }
 
 public readonly record struct FiestaClientCaptureProfileSelfTestResult(bool Success, string Detail);
+
+internal sealed record FiestaWorldClientKeyCapture(
+    int TcpStreamId,
+    int XorPosition,
+    byte[] Body);
