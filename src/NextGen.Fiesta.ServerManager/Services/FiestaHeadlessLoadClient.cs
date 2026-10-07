@@ -115,13 +115,24 @@ public sealed class FiestaHeadlessLoadClient
             var zoneTransferPayload = BuildZoneTransferPayload(options, credential, randomId);
             await zoneConnection.SendDecryptedPayloadAsync(zoneTransferPayload, cancellationToken);
 
-            // A successful original-client login emits the character-information cascade and ends it with SH4/72.
-            // Waiting for that marker prevents a mere TCP connection from being counted as a successful player login.
-            await WaitForAsync(zoneConnection, 4, 72, options.ZoneLoginTimeout, cancellationToken);
-            SetStage(FiestaLoadClientStage.ZoneAuthenticated);
+            // Real NA2016 Zone login is NC_MAP_LOGIN_REQ (CH6/1) -> initialization cascade ->
+            // NC_MAP_LOGIN_ACK (SH6/2) -> NC_MAP_LOGINCOMPLETE_CMD (CH6/3).
+            // SH4/72 (NC_CHAR_CLIENT_GAME_CMD) is only one item inside that cascade and arrives
+            // before SH6/2 in the real capture. Sending CH6/3 at SH4/72 leaves only a live TCP
+            // session but does not complete the authoritative ShinePlayer/map-login transition.
+            await WaitForAsync(zoneConnection, 6, 2, options.ZoneLoginTimeout, cancellationToken);
+            SetStage(
+                FiestaLoadClientStage.ZoneAuthenticated,
+                "NC_MAP_LOGIN_ACK SH6/2 empfangen");
 
-            await zoneConnection.SendPacketAsync(6, 3, ReadOnlyMemory<byte>.Empty, cancellationToken);
-            SetStage(FiestaLoadClientStage.ClientReady);
+            await zoneConnection.SendPacketAsync(
+                6,
+                3,
+                ReadOnlyMemory<byte>.Empty,
+                cancellationToken);
+            SetStage(
+                FiestaLoadClientStage.ClientReady,
+                "NC_MAP_LOGINCOMPLETE_CMD CH6/3 gesendet");
 
             var holdFor = options.HoldDuration;
             if (holdFor > TimeSpan.Zero)
@@ -282,7 +293,7 @@ public sealed class FiestaHeadlessLoadClient
 
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · World bleibt bis Zone/ClientReady offen · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · World bleibt offen · Zone CH6/1→SH6/2→CH6/3 · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
