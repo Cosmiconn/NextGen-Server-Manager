@@ -306,7 +306,7 @@ public partial class MainWindow
         }));
         profileRow.Children.Add(new TextBlock
         {
-            Text = "Pflicht für Originalserver-Test: erhält die echten 18 CH3/15-Prefixbytes.",
+            Text = "Pflicht für Originalserver-Test: erhält echten CH3/101-Body, CH3/4 und vollständigen CH3/15-Body mit binärem capture-derived Keyoffset.",
             Foreground = (Brush)FindResource("Muted"),
             FontSize = 9,
             VerticalAlignment = VerticalAlignment.Center,
@@ -568,8 +568,10 @@ public partial class MainWindow
         if (_zoneLoadLoginHostBox is not null) _zoneLoadLoginHostBox.Text = profile.LoginHost;
         if (_zoneLoadLoginPortBox is not null) _zoneLoadLoginPortBox.Text = profile.LoginPort.ToString();
         if (_zoneLoadWorldIdBox is not null) _zoneLoadWorldIdBox.Text = profile.WorldId.ToString();
-        if (_zoneLoadClientYearBox is not null) _zoneLoadClientYearBox.Text = profile.ClientYear.ToString();
-        if (_zoneLoadClientVersionBox is not null) _zoneLoadClientVersionBox.Text = profile.ClientVersion.ToString();
+        if (_zoneLoadClientYearBox is not null && profile.ClientYear > 0)
+            _zoneLoadClientYearBox.Text = profile.ClientYear.ToString();
+        if (_zoneLoadClientVersionBox is not null && profile.ClientVersion > 0)
+            _zoneLoadClientVersionBox.Text = profile.ClientVersion.ToString();
         if (_zoneLoadFileHashBox is not null) _zoneLoadFileHashBox.Text = profile.FileHash ?? string.Empty;
 
         var createDetail = imported.Character?.Success == true
