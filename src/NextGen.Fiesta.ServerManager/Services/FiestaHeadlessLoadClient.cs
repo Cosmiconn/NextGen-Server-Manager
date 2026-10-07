@@ -59,14 +59,32 @@ public sealed class FiestaHeadlessLoadClient
                 await WaitForAsync(login, 3, 103, options.StepTimeout, cancellationToken);
                 SetStage(FiestaLoadClientStage.VersionAccepted);
 
-                var fileHashBody = BuildFileHashBody(options, clientProfile);
-                if (fileHashBody is not null)
+                // Real NA2016 login capture order is significant:
+                // CH3/90 Login is sent first, then CH3/4 FileHash. The server acknowledges
+                // CH3/4 with SH3/5 and only afterwards emits SH3/10 LoginAccepted.
+                // Sending CH3/4 before CH3/90 makes the original Login server close the socket.
+                var authenticationPackets = BuildLoginAuthenticationPackets(
+                    options,
+                    clientProfile,
+                    credential,
+                    passwordMd5);
+
+                await login.SendPacketAsync(
+                    authenticationPackets[0].Header,
+                    authenticationPackets[0].Type,
+                    authenticationPackets[0].Body,
+                    cancellationToken);
+
+                if (authenticationPackets.Count > 1)
                 {
-                    await login.SendPacketAsync(3, 4, fileHashBody, cancellationToken);
+                    await login.SendPacketAsync(
+                        authenticationPackets[1].Header,
+                        authenticationPackets[1].Type,
+                        authenticationPackets[1].Body,
+                        cancellationToken);
                     await WaitForAsync(login, 3, 5, options.StepTimeout, cancellationToken);
                 }
 
-                await login.SendPacketAsync(3, 90, BuildLoginBody(credential.Username, passwordMd5, options.ClientTag), cancellationToken);
                 await WaitForAsync(login, 3, 10, options.StepTimeout, cancellationToken);
                 SetStage(FiestaLoadClientStage.LoginAuthenticated);
 
@@ -209,6 +227,33 @@ public sealed class FiestaHeadlessLoadClient
             if (login.Length != 318)
                 throw new InvalidDataException($"Reales NA2016-Loginpaket muss 318 Byte Payload haben, erzeugt wurden {login.Length}.");
 
+            var authSequence = BuildLoginAuthenticationPackets(
+                new FiestaHeadlessProbeOptions
+                {
+                    LoginHost = "127.0.0.1",
+                    LoginPort = 9010,
+                    ClientYear = 2016,
+                    ClientVersion = 2,
+                    FileHash = "33B543B0CA6E7C41E5D1D0651307"
+                },
+                profile: null,
+                new FiestaLoadClientCredential
+                {
+                    Username = "probe",
+                    PasswordMd5 = "21232f297a57a5a743894a0e4a801fc3",
+                    CharacterName = "probechar"
+                },
+                "21232f297a57a5a743894a0e4a801fc3");
+            if (authSequence.Count != 2
+                || authSequence[0].Header != 3
+                || authSequence[0].Type != 90
+                || authSequence[1].Header != 3
+                || authSequence[1].Type != 4)
+            {
+                throw new InvalidDataException(
+                    "Reale Login-Reihenfolge muss CH3/90 Login vor CH3/4 FileHash senden.");
+            }
+
             var crypto = new FiestaXorCipher(123);
             var encrypted = login.ToArray();
             crypto.TransformInPlace(encrypted);
@@ -244,7 +289,7 @@ public sealed class FiestaHeadlessLoadClient
 
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Framing, Opcode, Login-318, XOR und 64-Byte World-Transfermaterial bestätigt.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Framing, Opcode, Login-318, CH3/90→CH3/4 Reihenfolge, XOR und 64-Byte World-Transfermaterial bestätigt.");
         }
         catch (Exception ex)
         {
@@ -403,6 +448,27 @@ public sealed class FiestaHeadlessLoadClient
             : BuildNullTerminatedAscii(options.FileHash);
     }
 
+    private static IReadOnlyList<FiestaOutboundPacket> BuildLoginAuthenticationPackets(
+        FiestaHeadlessProbeOptions options,
+        FiestaCapturedClientProfile? profile,
+        FiestaLoadClientCredential credential,
+        string passwordMd5)
+    {
+        var packets = new List<FiestaOutboundPacket>(2)
+        {
+            new(
+                3,
+                90,
+                BuildLoginBody(credential.Username, passwordMd5, options.ClientTag))
+        };
+
+        var fileHashBody = BuildFileHashBody(options, profile);
+        if (fileHashBody is not null)
+            packets.Add(new FiestaOutboundPacket(3, 4, fileHashBody));
+
+        return packets;
+    }
+
     private static byte[] BuildLoginBody(string username, string passwordMd5, string clientTag)
     {
         var body = new byte[316];
@@ -535,6 +601,8 @@ public sealed class FiestaHeadlessLoadClient
         if (zero >= 0) source = source[..zero];
         return Encoding.ASCII.GetString(source).Trim();
     }
+
+    private sealed record FiestaOutboundPacket(int Header, int Type, byte[] Body);
 
     private sealed record FiestaEndpointRedirect(string Host, int Port, byte[] TransferMaterial);
 }
