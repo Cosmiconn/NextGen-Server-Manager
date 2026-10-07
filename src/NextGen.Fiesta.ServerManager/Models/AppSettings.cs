@@ -31,4 +31,7 @@ public sealed class AppSettings
     public int HookMemoryWarnPercent { get; set; } = 75;
     public int HookMemoryBlockPercent { get; set; } = 90;
     public bool AllowExperimentalZoneBinaryHooks { get; set; } = false;
+
+    // Hardware-aware process scheduling. Off by default until explicitly enabled.
+    public bool AutoApplyCpuAffinity { get; set; } = false;
 }
