@@ -85,7 +85,11 @@ public sealed class FiestaHeadlessLoadClient
                     await WaitForAsync(login, 3, 5, options.StepTimeout, cancellationToken);
                 }
 
-                await WaitForAsync(login, 3, 10, options.StepTimeout, cancellationToken);
+                await WaitForLoginAcceptedAsync(
+                    login,
+                    credential.Username,
+                    options.StepTimeout,
+                    cancellationToken);
                 SetStage(FiestaLoadClientStage.LoginAuthenticated);
 
                 await login.SendPacketAsync(3, 11, new[] { options.WorldId }, cancellationToken);
@@ -379,6 +383,40 @@ public sealed class FiestaHeadlessLoadClient
 
         throw new TimeoutException(
             $"ZoneRedirect SH4/3 wurde innerhalb von {timeout.TotalSeconds:N0}s nicht empfangen.");
+    }
+
+    private static async Task<FiestaPacket> WaitForLoginAcceptedAsync(
+        FiestaWireConnection connection,
+        string username,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            var packet = await connection.ReadPacketAsync(remaining, cancellationToken);
+
+            if (packet.Header == 2 && packet.Type == 4)
+            {
+                await connection.SendPacketAsync(2, 5, ReadOnlyMemory<byte>.Empty, cancellationToken);
+                continue;
+            }
+
+            if (packet.Header == 3 && packet.Type == 9)
+            {
+                var hint = username.StartsWith("r_", StringComparison.OrdinalIgnoreCase)
+                    ? "Der r_-Auto-Register-Login wurde vom Server abgelehnt."
+                    : "Der Account existiert vermutlich nicht. Für diesen NA2016-Server erzeugt ein Username mit Präfix r_ beim ersten Login automatisch einen Account.";
+                throw new InvalidOperationException($"Loginserver meldete SH3/9 für '{username}'. {hint}");
+            }
+
+            if (packet.Header == 3 && packet.Type == 10)
+                return packet;
+        }
+
+        throw new TimeoutException(
+            $"LoginAccepted SH3/10 wurde innerhalb von {timeout.TotalSeconds:N0}s nicht empfangen.");
     }
 
     private static async Task<FiestaPacket> WaitForAsync(

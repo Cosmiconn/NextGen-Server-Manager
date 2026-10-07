@@ -6,10 +6,12 @@ using System.Text.RegularExpressions;
 namespace NextGen.Fiesta.ServerManager.Services;
 
 /// <summary>
-/// Generates an OFFLINE test-account plan. It never opens SQL connections.
-/// The generated SQL calls the original NA2016 Account.dbo.usp_User_insert procedure whose
-/// full signature is present in the supplied Account.bak. Characters are intentionally NOT
-/// inserted into World00_Character; the headless client creates them through captured CH5/1.
+/// Generates isolated load-test identities. It never opens SQL connections.
+/// Preferred NA2016 mode is login auto-registration: account names are forced to the server's
+/// r_ prefix and are created by the original Login server on first authentication.
+/// An explicit SQL fallback can still generate Account.dbo.usp_User_insert statements.
+/// Characters are intentionally NOT inserted into World00_Character; the headless client
+/// creates them through captured CH5/1.
 /// </summary>
 public sealed class FiestaLoadIdentityGenerator
 {
@@ -25,12 +27,15 @@ public sealed class FiestaLoadIdentityGenerator
         var outputDirectory = Path.GetFullPath(options.OutputDirectory);
         Directory.CreateDirectory(outputDirectory);
 
+        var usernamePrefix = options.GetEffectiveUsernamePrefix();
+        var characterPrefix = options.GetEffectiveCharacterPrefix();
+
         var clients = new List<FiestaLoadClientCredential>(options.Count);
         for (var i = 1; i <= options.Count; i++)
         {
             var suffix = i.ToString("D6");
-            var username = options.UsernamePrefix + suffix;
-            var characterName = options.CharacterPrefix + suffix;
+            var username = usernamePrefix + suffix;
+            var characterName = characterPrefix + suffix;
             var passwordMd5 = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
             clients.Add(new FiestaLoadClientCredential
@@ -51,15 +56,33 @@ public sealed class FiestaLoadIdentityGenerator
 
         var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
         var manifestPath = Path.Combine(outputDirectory, $"load-credentials-{options.Count}-{stamp}.json");
-        var sqlPath = Path.Combine(outputDirectory, $"create-load-accounts-{options.Count}-{stamp}.sql");
-
         var manifestJson = JsonSerializer.Serialize(
             manifest,
             new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(manifestPath, manifestJson + Environment.NewLine, new UTF8Encoding(false));
 
-        var sql = BuildSql(options, clients);
-        File.WriteAllText(sqlPath, sql, new UTF8Encoding(false));
+        string sqlPath = string.Empty;
+        string sqlSha256 = string.Empty;
+        string detail;
+        if (options.UseLoginAutoRegistration)
+        {
+            detail =
+                $"LOAD IDENTITIES: AUTO-REGISTER · {clients.Count:N0} Accounts · " +
+                $"User {usernamePrefix}###### · Characters {characterPrefix}###### · " +
+                $"Credentials {Path.GetFileName(manifestPath)}. " +
+                "Kein SQL erforderlich: der originale Login-Server legt r_-Accounts beim ersten Login an.";
+        }
+        else
+        {
+            sqlPath = Path.Combine(outputDirectory, $"create-load-accounts-{options.Count}-{stamp}.sql");
+            var sql = BuildSql(options, clients);
+            File.WriteAllText(sqlPath, sql, new UTF8Encoding(false));
+            sqlSha256 = Sha256File(sqlPath);
+            detail =
+                $"LOAD IDENTITIES: SQL-FALLBACK · {clients.Count:N0} Accounts · " +
+                $"SQL {Path.GetFileName(sqlPath)} · Credentials {Path.GetFileName(manifestPath)}. " +
+                "Keine Datenbank wurde verändert.";
+        }
 
         return new FiestaLoadIdentityGenerationResult
         {
@@ -67,12 +90,10 @@ public sealed class FiestaLoadIdentityGenerator
             Count = clients.Count,
             SqlPath = sqlPath,
             CredentialManifestPath = manifestPath,
-            SqlSha256 = Sha256File(sqlPath),
+            SqlSha256 = sqlSha256,
             ManifestSha256 = Sha256File(manifestPath),
-            Detail =
-                $"LOAD IDENTITIES: GENERATED · {clients.Count:N0} Accounts · " +
-                $"SQL {Path.GetFileName(sqlPath)} · Credentials {Path.GetFileName(manifestPath)}. " +
-                "Keine Datenbank wurde verändert."
+            AutoRegistration = options.UseLoginAutoRegistration,
+            Detail = detail
         };
     }
 
@@ -80,30 +101,49 @@ public sealed class FiestaLoadIdentityGenerator
     {
         try
         {
-            var options = new FiestaLoadIdentityGenerationOptions
+            var autoOptions = new FiestaLoadIdentityGenerationOptions
             {
                 Count = 3,
                 UsernamePrefix = "ngt",
                 CharacterPrefix = "NGT",
+                UseLoginAutoRegistration = true,
+                OutputDirectory = Path.GetTempPath(),
+                AccountDatabase = "Account"
+            };
+            autoOptions.Validate();
+
+            if (autoOptions.GetEffectiveUsernamePrefix() != "r_ngt"
+                || autoOptions.GetEffectiveCharacterPrefix() != "NGT")
+            {
+                throw new InvalidDataException("Auto-Register-Präfix wurde nicht korrekt auf r_ normalisiert.");
+            }
+
+            var sqlOptions = new FiestaLoadIdentityGenerationOptions
+            {
+                Count = 3,
+                UsernamePrefix = "ngt",
+                CharacterPrefix = "NGT",
+                UseLoginAutoRegistration = false,
                 OutputDirectory = Path.GetTempPath(),
                 AccountDatabase = "Account"
             };
 
             var clients = new List<FiestaLoadClientCredential>();
-            for (var i = 1; i <= options.Count; i++)
+            for (var i = 1; i <= sqlOptions.Count; i++)
             {
                 var suffix = i.ToString("D6");
                 clients.Add(new FiestaLoadClientCredential
                 {
-                    Username = options.UsernamePrefix + suffix,
-                    PasswordMd5 = Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes("selftest-" + i)))[..32].ToLowerInvariant(),
-                    CharacterName = options.CharacterPrefix + suffix,
+                    Username = sqlOptions.GetEffectiveUsernamePrefix() + suffix,
+                    PasswordMd5 = Convert.ToHexString(
+                        SHA256.HashData(Encoding.ASCII.GetBytes("selftest-" + i)))[..32].ToLowerInvariant(),
+                    CharacterName = sqlOptions.GetEffectiveCharacterPrefix() + suffix,
                     Slot = 0,
                     CreateCharacterIfMissing = true
                 });
             }
 
-            var sql = BuildSql(options, clients);
+            var sql = BuildSql(sqlOptions, clients);
             if (!sql.Contains("[Account].[dbo].[usp_User_insert]", StringComparison.Ordinal)
                 || !sql.Contains("BEGIN TRANSACTION", StringComparison.Ordinal)
                 || !sql.Contains("ROLLBACK TRANSACTION", StringComparison.Ordinal)
@@ -111,12 +151,12 @@ public sealed class FiestaLoadIdentityGenerator
                 || clients.Any(x => !x.CreateCharacterIfMissing)
                 || clients.Select(x => x.Username).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 3)
             {
-                throw new InvalidDataException("Generator verletzte Stored-Procedure-/Transaktions-/Eindeutigkeitsregeln.");
+                throw new InvalidDataException("SQL-Fallback verletzte Stored-Procedure-/Transaktions-/Eindeutigkeitsregeln.");
             }
 
             return new FiestaLoadIdentitySelfTestResult(
                 true,
-                "LOAD IDENTITY SELFTEST: PASS · original usp_User_insert only, transaction guard, unique manifest.");
+                "LOAD IDENTITY SELFTEST: PASS · r_-Login-Auto-Registration + optionaler usp_User_insert SQL-Fallback.");
         }
         catch (Exception ex)
         {
@@ -205,6 +245,7 @@ public sealed class FiestaLoadIdentityGenerationOptions
     public int Count { get; init; } = 1600;
     public string UsernamePrefix { get; init; } = "ngl";
     public string CharacterPrefix { get; init; } = "NGL";
+    public bool UseLoginAutoRegistration { get; init; } = true;
     public byte CharacterSlot { get; init; }
     public string AccountDatabase { get; init; } = "Account";
     public string OutputDirectory { get; init; } = string.Empty;
@@ -213,16 +254,40 @@ public sealed class FiestaLoadIdentityGenerationOptions
     {
         if (Count is < 1 or > 2000)
             throw new ArgumentOutOfRangeException(nameof(Count), "Count muss zwischen 1 und 2000 liegen.");
-        if (!SafeIdentifier(UsernamePrefix) || UsernamePrefix.Length + 6 > 20)
-            throw new ArgumentException("UsernamePrefix darf nur A-Z/a-z/0-9/_ enthalten und mit 6-stelliger Nummer maximal 20 Zeichen ergeben.");
-        if (!SafeIdentifier(CharacterPrefix) || CharacterPrefix.Length + 6 > 16)
-            throw new ArgumentException("CharacterPrefix darf nur A-Z/a-z/0-9/_ enthalten und mit 6-stelliger Nummer maximal 16 Zeichen ergeben.");
+        if (!SafeIdentifier(UsernamePrefix))
+            throw new ArgumentException("UsernamePrefix darf nur A-Z/a-z/0-9/_ enthalten.");
+        if (!SafeIdentifier(CharacterPrefix))
+            throw new ArgumentException("CharacterPrefix darf nur A-Z/a-z/0-9/_ enthalten.");
+        if (GetEffectiveUsernamePrefix().Length + 6 > 20)
+            throw new ArgumentException("Effektiver UsernamePrefix inklusive r_ und 6-stelliger Nummer darf maximal 20 Zeichen ergeben.");
+        if (GetEffectiveCharacterPrefix().Length + 6 > 16)
+            throw new ArgumentException("CharacterPrefix darf mit 6-stelliger Nummer maximal 16 Zeichen ergeben.");
         if (CharacterSlot > 10)
             throw new ArgumentOutOfRangeException(nameof(CharacterSlot));
         if (!SafeIdentifier(AccountDatabase) || AccountDatabase.Length > 64)
             throw new ArgumentException("AccountDatabase enthält ungültige Zeichen.");
         if (string.IsNullOrWhiteSpace(OutputDirectory))
             throw new ArgumentException("OutputDirectory fehlt.");
+    }
+
+    internal string GetEffectiveUsernamePrefix()
+    {
+        var prefix = UsernamePrefix.Trim();
+        if (!UseLoginAutoRegistration)
+            return prefix;
+
+        return prefix.StartsWith("r_", StringComparison.OrdinalIgnoreCase)
+            ? "r_" + prefix[2..]
+            : "r_" + prefix;
+    }
+
+    internal string GetEffectiveCharacterPrefix()
+    {
+        var prefix = CharacterPrefix.Trim();
+        if (UseLoginAutoRegistration && prefix.StartsWith("R_", StringComparison.OrdinalIgnoreCase))
+            prefix = prefix[2..];
+
+        return prefix;
     }
 
     private static bool SafeIdentifier(string value)
@@ -238,6 +303,7 @@ public sealed class FiestaLoadIdentityGenerationResult
     public string CredentialManifestPath { get; init; } = string.Empty;
     public string SqlSha256 { get; init; } = string.Empty;
     public string ManifestSha256 { get; init; } = string.Empty;
+    public bool AutoRegistration { get; init; }
     public string Detail { get; init; } = string.Empty;
 }
 

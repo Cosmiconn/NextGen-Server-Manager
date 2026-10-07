@@ -346,9 +346,12 @@ public partial class MainWindow
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(6, 0, 3, 0)
         });
-        _zoneLoadIdentityPrefixBox = CreateZoneLoadTextBox(70, "Account-/Char-Prefix", "ngl");
+        _zoneLoadIdentityPrefixBox = CreateZoneLoadTextBox(
+            84,
+            "Basis-Prefix; Accounts werden im Auto-Register-Modus automatisch als r_<prefix>###### erzeugt",
+            "ngl");
         identityRow.Children.Add(_zoneLoadIdentityPrefixBox);
-        identityRow.Children.Add(CreateZonePoolButton("SQL + Credentials erzeugen", false,
+        identityRow.Children.Add(CreateZonePoolButton("Auto-Register Credentials erzeugen", false,
             () => RunZonePoolUiActionAsync("Load-Identitäten", GenerateLoadIdentitiesAsync)));
         stack.Children.Add(identityRow);
 
@@ -597,6 +600,7 @@ public partial class MainWindow
                 Count = count,
                 UsernamePrefix = prefix.ToLowerInvariant(),
                 CharacterPrefix = prefix.ToUpperInvariant(),
+                UseLoginAutoRegistration = true,
                 CharacterSlot = 0,
                 AccountDatabase = "Account",
                 OutputDirectory = GetZonePoolWorkDirectory()
@@ -606,8 +610,9 @@ public partial class MainWindow
             _zoneLoadCredentialPathBox.Text = result.CredentialManifestPath;
 
         var detail = result.Detail +
-                     $" · SQL SHA {ShortHash(result.SqlSha256)} · Manifest SHA {ShortHash(result.ManifestSha256)} · " +
-                     "WICHTIG: Das SQL-Skript vor dem Rampentest einmal bewusst gegen die lokale TEST-Account-Datenbank ausführen; der Manager führt es nicht automatisch aus.";
+                     $" · Manifest SHA {ShortHash(result.ManifestSha256)} · " +
+                     "Beim ersten Login erzeugt der originale Login-Server den jeweiligen r_-Account mit genau den Credentials aus diesem Manifest. " +
+                     "Kein SQL-Import nötig.";
         SetZoneLoadStatus(detail);
         return detail;
     }
