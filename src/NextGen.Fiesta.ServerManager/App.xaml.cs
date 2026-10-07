@@ -94,6 +94,11 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(loadRampTimingSelfTest.Detail);
             Log("LOAD_RAMP_TIMING_SELFTEST PASS · " + loadRampTimingSelfTest.Detail);
 
+            var logDeltaClassificationSelfTest = ZonePoolRuntimeLogDeltaAudit.RunClassificationSelfTest();
+            if (!logDeltaClassificationSelfTest.Success)
+                throw new InvalidOperationException(logDeltaClassificationSelfTest.Detail);
+            Log("LOG_DELTA_CLASSIFICATION_SELFTEST PASS · " + logDeltaClassificationSelfTest.Detail);
+
             var listenerRewriteSelfTest = ZoneClientListenerTestConfiguration.RunRewriteSelfTest();
             if (!listenerRewriteSelfTest.Success)
                 throw new InvalidOperationException(listenerRewriteSelfTest.Detail);

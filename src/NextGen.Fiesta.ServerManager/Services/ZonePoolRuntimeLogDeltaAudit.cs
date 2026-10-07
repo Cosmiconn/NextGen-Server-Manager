@@ -445,14 +445,17 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
 
         foreach (var issue in _analyzer.Analyze(lines, path))
         {
+            var isKnownScriptDebugAssertion = IsKnownTsDebugLuaAssertion(issue.Code, issue.Evidence);
             findings.Add(new ZonePoolLogDeltaFinding
             {
                 Source = path,
-                Severity = issue.Severity.ToString(),
-                Code = issue.Code ?? string.Empty,
-                Title = issue.Title ?? string.Empty,
+                Severity = isKnownScriptDebugAssertion ? "Info" : issue.Severity.ToString(),
+                Code = isKnownScriptDebugAssertion ? "NG-SCRIPT-DEBUG" : issue.Code ?? string.Empty,
+                Title = isKnownScriptDebugAssertion ? "AI-Script-Debugmeldung" : issue.Title ?? string.Empty,
                 Evidence = issue.Evidence ?? string.Empty,
-                Blocking = issue.Code is not null && BlockingCodes.Contains(issue.Code)
+                Blocking = !isKnownScriptDebugAssertion
+                           && issue.Code is not null
+                           && BlockingCodes.Contains(issue.Code)
             });
         }
 
@@ -472,6 +475,47 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
                 });
                 break;
             }
+        }
+    }
+
+    private static bool IsKnownTsDebugLuaAssertion(string? code, string? evidence)
+    {
+        if (!string.Equals(code, "NG-CORE-0002", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(evidence))
+        {
+            return false;
+        }
+
+        return evidence.Contains("AssertClass::ac_AssertFail", StringComparison.OrdinalIgnoreCase)
+               && evidence.Contains("[TS-Debug ", StringComparison.OrdinalIgnoreCase)
+               && evidence.Contains(".lua", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static ZonePoolLogDeltaAuditSelfTestResult RunClassificationSelfTest()
+    {
+        try
+        {
+            const string scriptDebug =
+                "19:53:45 : AssertClass::ac_AssertFail : [TS-Debug TS_Wegweiser.lua Herzschlag: Anselm bei 131600 11386, Ziel Wegpunkt 13, MoveState 1]";
+            const string realAssert =
+                "19:53:45 : AssertClass::ac_AssertFail : ShineObjectManager invariant violated";
+
+            if (!IsKnownTsDebugLuaAssertion("NG-CORE-0002", scriptDebug))
+                throw new InvalidDataException("TS-Debug Lua-Assertion wurde nicht als Script-Debug erkannt.");
+            if (IsKnownTsDebugLuaAssertion("NG-CORE-0002", realAssert))
+                throw new InvalidDataException("Echte Server-Assertion wurde fälschlich als Script-Debug freigestellt.");
+            if (IsKnownTsDebugLuaAssertion("NG-CORE-0001", scriptDebug))
+                throw new InvalidDataException("Falscher Diagnostic-Code wurde fälschlich als Script-Debug freigestellt.");
+
+            return new ZonePoolLogDeltaAuditSelfTestResult(
+                true,
+                "LOG DELTA CLASSIFICATION SELFTEST: PASS · [TS-Debug *.lua] Assertions sind Info; echte NG-CORE-0002 Assertions bleiben blockierend.");
+        }
+        catch (Exception ex)
+        {
+            return new ZonePoolLogDeltaAuditSelfTestResult(
+                false,
+                "LOG DELTA CLASSIFICATION SELFTEST: FAIL · " + ex.Message);
         }
     }
 
@@ -611,3 +655,5 @@ public sealed class ZonePoolLogDeltaFinding
     public string Evidence { get; init; } = string.Empty;
     public bool Blocking { get; init; }
 }
+
+public readonly record struct ZonePoolLogDeltaAuditSelfTestResult(bool Success, string Detail);
