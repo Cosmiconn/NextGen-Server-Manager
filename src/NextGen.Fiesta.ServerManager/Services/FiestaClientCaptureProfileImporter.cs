@@ -525,7 +525,7 @@ public sealed class FiestaClientCaptureProfileImporter
         }
 
         var serverPackets = ParseFrames(serverData)
-            .Select(FiestaPacket.FromPayload)
+            .Select(payload => FiestaPacket.FromPayload(payload))
             .ToList();
         var handshake = serverPackets
             .FirstOrDefault(x => x.Header == 2 && x.Type == 7 && x.Body.Length >= 2);
