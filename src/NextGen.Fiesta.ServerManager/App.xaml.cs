@@ -99,6 +99,11 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(logDeltaClassificationSelfTest.Detail);
             Log("LOG_DELTA_CLASSIFICATION_SELFTEST PASS · " + logDeltaClassificationSelfTest.Detail);
 
+            var affinitySelfTest = ProcessorAffinityService.RunPlannerSelfTest();
+            if (!affinitySelfTest.Success)
+                throw new InvalidOperationException(affinitySelfTest.Detail);
+            Log("CPU_AFFINITY_SELFTEST PASS · " + affinitySelfTest.Detail);
+
             var listenerRewriteSelfTest = ZoneClientListenerTestConfiguration.RunRewriteSelfTest();
             if (!listenerRewriteSelfTest.Success)
                 throw new InvalidOperationException(listenerRewriteSelfTest.Detail);
