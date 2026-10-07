@@ -665,21 +665,32 @@ public partial class MainWindow
                             : null,
                     StepTimeout = TimeSpan.FromSeconds(15),
                     ZoneLoginTimeout = TimeSpan.FromSeconds(30),
-                    HoldDuration = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(1)
+                    HoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(1)
                 },
                 StageTargets = singleClientOnly
                     ? new[] { 1 }
                     : new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 },
                 ClientStartInterval = singleClientOnly ? TimeSpan.Zero : TimeSpan.FromMilliseconds(50),
                 StageSettleTime = singleClientOnly ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(10),
-                SessionHoldDuration = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(1),
-                FinalStabilityDuration = singleClientOnly ? TimeSpan.FromSeconds(10) : TimeSpan.FromMinutes(5),
+                SessionHoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(1),
+                FinalStabilityDuration = TimeSpan.FromMinutes(5),
                 StabilityPollInterval = TimeSpan.FromSeconds(5)
             };
 
+            var vm = RequireMainViewModel();
+            var zoneName = new DirectoryInfo(Path.GetDirectoryName(target)!).Name;
+            var loadLogCheckpoint = Path.Combine(
+                GetZonePoolWorkDirectory(),
+                $"{zoneName}-player-load-log-{DateTime.Now:yyyyMMdd-HHmmssfff}.json");
+            var checkpointResult = await Task.Run(() =>
+                new ZonePoolRuntimeLogDeltaAudit().SaveCheckpoint(vm.ServerRoot, loadLogCheckpoint));
+            if (!checkpointResult.Success)
+                throw new InvalidOperationException("Player-Load Log-Checkpoint fehlgeschlagen: " + checkpointResult.Detail);
+            _zonePoolCheckpointPath = loadLogCheckpoint;
+
             SetZoneLoadStatus(singleClientOnly
-                ? "1-Client-Probe läuft: Login → World → Zone → ShinePlayer …"
-                : "Load-Ramp läuft: 1 → 10 → 100 → 500 → 1000 → 1450 → 1510 → 1600 …");
+                ? "1-Client-Probe läuft 5 Minuten: Login → World → Zone → ShinePlayer + Log-Audit …"
+                : "Load-Ramp läuft: 1 → 10 → 100 → 500 → 1000 → 1450 → 1510 → 1600 + 5-Min-Stabilität + Log-Audit …");
 
             var result = await new FiestaLoadRampCoordinator().RunAsync(
                 options,
@@ -695,14 +706,28 @@ public partial class MainWindow
                 },
                 cancellation.Token);
 
-            SetZoneLoadStatus(result.Detail);
-            if (result.Blocked)
+            var logAudit = await Task.Run(() =>
+                new ZonePoolRuntimeLogDeltaAudit().Audit(vm.ServerRoot, loadLogCheckpoint));
+            if (!logAudit.Success)
+                throw new InvalidOperationException("Player-Load Log-Audit konnte nicht abgeschlossen werden: " + logAudit.Detail);
+
+            var combinedDetail =
+                result.Detail + Environment.NewLine + Environment.NewLine +
+                logAudit.Detail +
+                (logAudit.Clean
+                    ? " · PLAYER-LOAD LOGS CLEAN"
+                    : logAudit.ReviewRequired
+                        ? $" · REVIEW · {logAudit.Findings.Count} Befund(e), {logAudit.EvidenceGaps.Count} Evidenzlücke(n)"
+                        : " · BLOCKED");
+
+            SetZoneLoadStatus(combinedDetail);
+            if (result.Passed && logAudit.Clean)
             {
-                MessageBox.Show(this, result.Detail, "Player Load Verification", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(this, combinedDetail, "Player Load Verification", MessageBoxButton.OK, MessageBoxImage.Information);
             }
-            else if (result.Passed)
+            else
             {
-                MessageBox.Show(this, result.Detail, "Player Load Verification", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(this, combinedDetail, "Player Load Verification", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
         catch (OperationCanceledException)

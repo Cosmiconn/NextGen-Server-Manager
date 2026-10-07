@@ -350,6 +350,106 @@ public sealed class ZoneClientListenerTestConfiguration
         };
     }
 
+    public ZoneClientListenerAppliedVerificationResult VerifyApplied(string targetZoneExePath)
+    {
+        if (!TryResolvePaths(targetZoneExePath, out var targetZoneExe, out var serverInfoPath, out var zoneNo, out var resolveError))
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked(resolveError);
+
+        if (!File.Exists(targetZoneExe) || !File.Exists(serverInfoPath))
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked("Ziel-Zone.exe oder ServerInfo.txt fehlt.");
+
+        var binaryHash = TrySha256File(targetZoneExe, out var binaryHashError);
+        if (binaryHashError is not null)
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked("Ziel-Binary konnte nicht gehasht werden: " + binaryHashError);
+        if (!binaryHash.Equals(ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256, StringComparison.OrdinalIgnoreCase))
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked("Ziel-Zone.exe ist nicht der zertifizierte 2000/12000/512 Build.");
+
+        var deploymentError = ValidateDeploymentMetadata(targetZoneExe);
+        if (deploymentError is not null)
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked(deploymentError);
+
+        var manifestPath = GetManifestPath(serverInfoPath);
+        var backupPath = GetBackupPath(serverInfoPath);
+        if (!File.Exists(manifestPath) || !File.Exists(backupPath))
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked("Listener-Manifest oder Listener-Backup fehlt.");
+
+        ZoneClientListenerConfigurationMetadata? manifest;
+        try
+        {
+            manifest = JsonSerializer.Deserialize<ZoneClientListenerConfigurationMetadata>(File.ReadAllBytes(manifestPath));
+        }
+        catch (Exception ex)
+        {
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked("Listener-Manifest konnte nicht gelesen werden: " + ex.Message);
+        }
+
+        if (manifest is null
+            || manifest.FormatVersion != 1
+            || !string.Equals(manifest.State, "DEPLOYED", StringComparison.Ordinal)
+            || !PathEquals(manifest.ServerInfoPath, serverInfoPath)
+            || !PathEquals(manifest.TargetZoneExePath, targetZoneExe)
+            || !PathEquals(manifest.BackupPath, backupPath)
+            || manifest.ZoneNo != zoneNo
+            || manifest.OldMaxAccept != StockMaxAccept
+            || manifest.NewMaxAccept != CertifiedMaxAccept
+            || !manifest.CertifiedZoneSha256.Equals(ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked(
+                "Listener-Manifest entspricht nicht dem zertifizierten DEPLOYED-Zustand 1500→2000 für diese Zone.");
+        }
+
+        var currentHash = TrySha256File(serverInfoPath, out var currentHashError);
+        if (currentHashError is not null)
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked("ServerInfo.txt konnte nicht gehasht werden: " + currentHashError);
+        if (!currentHash.Equals(manifest.AppliedSha256, StringComparison.OrdinalIgnoreCase))
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked(
+                "ServerInfo.txt entspricht nicht mehr dem registrierten Listener-2000-Zustand.");
+
+        var backupHash = TrySha256File(backupPath, out var backupHashError);
+        if (backupHashError is not null)
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked("Listener-Backup konnte nicht gehasht werden: " + backupHashError);
+        if (!backupHash.Equals(manifest.OriginalSha256, StringComparison.OrdinalIgnoreCase))
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked("Listener-Backup stimmt nicht mit dem registrierten Stockzustand überein.");
+
+        IReadOnlyList<ServerInfoEntry> entries;
+        try { entries = _parser.Parse(serverInfoPath); }
+        catch (Exception ex)
+        {
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked("ServerInfo.txt konnte nicht verifiziert geparst werden: " + ex.Message);
+        }
+
+        var candidates = entries
+            .Where(x => x.ServerType == ZoneServerType
+                        && x.ZoneNo == zoneNo
+                        && x.ConnectionKind == ZoneClientConnectionKind)
+            .ToList();
+        if (candidates.Count != 1)
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked(
+                $"Listener-Zielzeile ist nicht eindeutig (Treffer: {candidates.Count}).");
+
+        var entry = candidates[0];
+        if (entry.MaxAccept != CertifiedMaxAccept
+            || !entry.Name.Equals(manifest.TargetEntryName, StringComparison.OrdinalIgnoreCase)
+            || entry.WorldNo != manifest.WorldNo
+            || entry.ZoneNo != manifest.ZoneNo)
+        {
+            return ZoneClientListenerAppliedVerificationResult.CreateBlocked(
+                $"Listener-Laufzeitkonfiguration ist nicht das zertifizierte Ziel: {entry.Name} nMaxAccept={entry.MaxAccept:N0}.");
+        }
+
+        return new ZoneClientListenerAppliedVerificationResult
+        {
+            Verified = true,
+            ServerInfoPath = serverInfoPath,
+            ManifestPath = manifestPath,
+            ZoneNo = zoneNo,
+            EntryName = entry.Name,
+            MaxAccept = entry.MaxAccept,
+            AppliedSha256 = currentHash,
+            Detail = $"LISTENER VERIFIED · {entry.Name} · Zone {zoneNo} · nMaxAccept {entry.MaxAccept:N0} · Manifest/Backup/SHA konsistent."
+        };
+    }
+
     private static ListenerRewriteResult RewriteTarget(string input, ServerInfoEntry target, int newMaxAccept)
     {
         var changed = 0;
@@ -695,6 +795,25 @@ public sealed class ZoneClientListenerReadinessResult
     public ServerInfoEntry? TargetEntry { get; init; }
     public string OriginalServerInfoSha256 { get; init; } = string.Empty;
     public string Detail { get; init; } = string.Empty;
+}
+
+public sealed class ZoneClientListenerAppliedVerificationResult
+{
+    public bool Verified { get; init; }
+    public string ServerInfoPath { get; init; } = string.Empty;
+    public string ManifestPath { get; init; } = string.Empty;
+    public int ZoneNo { get; init; }
+    public string EntryName { get; init; } = string.Empty;
+    public int MaxAccept { get; init; }
+    public string AppliedSha256 { get; init; } = string.Empty;
+    public string Detail { get; init; } = string.Empty;
+
+    public static ZoneClientListenerAppliedVerificationResult CreateBlocked(string detail)
+        => new()
+        {
+            Verified = false,
+            Detail = "LISTENER VERIFY BLOCKED · " + detail
+        };
 }
 
 public sealed class ZoneClientListenerConfigurationResult

@@ -52,6 +52,11 @@ public sealed class FiestaLoadRampCoordinator
             return FiestaLoadRampResult.CreateBlocked(
                 $"Runtime ShinePlayer-Limit ist {baseline.Pools.PlayerLimit:N0} statt {ZonePoolOfflineWriterSelfTest.PlayerTarget:N0}.");
 
+        var listener = new ZoneClientListenerTestConfiguration().VerifyApplied(options.TargetZoneExePath);
+        if (!listener.Verified || listener.MaxAccept != ZoneClientListenerTestConfiguration.CertifiedMaxAccept)
+            return FiestaLoadRampResult.CreateBlocked(
+                "Zertifizierter Zone-Listener 2000 ist nicht aktiv/verifiziert: " + listener.Detail);
+
         var baselinePlayers = baseline.Pools.PlayerCount;
         if (options.RequireEmptyBaseline && baselinePlayers != 0)
             return FiestaLoadRampResult.CreateBlocked(
@@ -68,7 +73,7 @@ public sealed class FiestaLoadRampCoordinator
             0,
             0,
             baselinePlayers,
-            $"Baseline Player={baselinePlayers:N0}, Limit={baseline.Pools.PlayerLimit:N0}."));
+            $"Baseline Player={baselinePlayers:N0}, Limit={baseline.Pools.PlayerLimit:N0} · Listener {listener.MaxAccept:N0} verifiziert."));
 
         try
         {
