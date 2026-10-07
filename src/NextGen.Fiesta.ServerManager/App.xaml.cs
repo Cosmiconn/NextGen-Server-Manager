@@ -64,6 +64,11 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(protocolSelfTest.Detail);
             Log("HEADLESS_PROTOCOL_SELFTEST PASS · " + protocolSelfTest.Detail);
 
+            var packetCaptureSelfTest = FiestaPacketCaptureRecorder.RunSelfTest();
+            if (!packetCaptureSelfTest.Success)
+                throw new InvalidOperationException(packetCaptureSelfTest.Detail);
+            Log("PACKET_CAPTURE_SELFTEST PASS · " + packetCaptureSelfTest.Detail);
+
             var captureSelfTest = FiestaZoneTransferCaptureImporter.RunSelfTest();
             if (!captureSelfTest.Success)
                 throw new InvalidOperationException(captureSelfTest.Detail);

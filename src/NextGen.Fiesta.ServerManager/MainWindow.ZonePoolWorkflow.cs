@@ -230,6 +230,8 @@ public partial class MainWindow
             Margin = new Thickness(0, 0, 0, 7)
         });
 
+        stack.Children.Add(BuildZoneLoadCaptureRecorderPanel());
+
         var captureRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
         captureRow.Children.Add(new TextBlock
         {

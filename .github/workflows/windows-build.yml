@@ -148,6 +148,9 @@ jobs:
             if ($startupText -notmatch 'HEADLESS_PROTOCOL_SELFTEST PASS') {
               throw 'NA2016 headless protocol selftest did not report PASS.'
             }
+            if ($startupText -notmatch 'PACKET_CAPTURE_SELFTEST PASS') {
+              throw 'Local dumpcap packet-capture selftest did not report PASS.'
+            }
             if ($startupText -notmatch 'ZONE_TRANSFER_CAPTURE_SELFTEST PASS') {
               throw 'NA2016 Zone transfer capture selftest did not report PASS.'
             }
