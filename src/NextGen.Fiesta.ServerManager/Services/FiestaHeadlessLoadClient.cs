@@ -14,6 +14,7 @@ namespace NextGen.Fiesta.ServerManager.Services;
 public sealed class FiestaHeadlessLoadClient
 {
     private static readonly TimeSpan DefaultStepTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ActiveHeartbeatInterval = TimeSpan.FromSeconds(10);
     private const int InitialWorldTransferMaxAttempts = 5;
 
     public async Task<FiestaHeadlessProbeResult> ProbeAndHoldAsync(
@@ -338,6 +339,18 @@ public sealed class FiestaHeadlessLoadClient
                     "Initial-World-Transportklassifizierung ist zu breit oder zu eng.");
             }
 
+            var heartbeatRequest = BuildPacketPayload(2, 4, ReadOnlySpan<byte>.Empty);
+            var heartbeatAck = BuildPacketPayload(2, 5, ReadOnlySpan<byte>.Empty);
+            if (heartbeatRequest.Length != 2
+                || heartbeatAck.Length != 2
+                || BinaryPrimitives.ReadUInt16LittleEndian(heartbeatRequest) != PackOpcode(2, 4)
+                || BinaryPrimitives.ReadUInt16LittleEndian(heartbeatAck) != PackOpcode(2, 5)
+                || ActiveHeartbeatInterval >= TimeSpan.FromSeconds(30))
+            {
+                throw new InvalidDataException(
+                    "Aktiver Holding-Heartbeat muss CH2/4↔SH2/5 ohne Body und deutlich unter dem 30-s-Servercheck arbeiten.");
+            }
+
             var retry1 = GetInitialWorldTransferRetryDelay("r_ngl000002", 1);
             var retry2 = GetInitialWorldTransferRetryDelay("r_ngl000002", 2);
             if (retry1 < TimeSpan.FromMilliseconds(500)
@@ -350,7 +363,7 @@ public sealed class FiestaHeadlessLoadClient
 
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2/Timeout/RemoteClose bounded retry+jitter vor SH3/20 · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone CH6/1→SH6/2→CH6/3 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2/Timeout/RemoteClose bounded retry+jitter vor SH3/20 · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone CH6/1→SH6/2→CH6/3 · Holding: aktiver CH2/4 alle 10 s + SH2/5, eingehendes SH2/4→CH2/5 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
@@ -716,24 +729,49 @@ public sealed class FiestaHeadlessLoadClient
         bool allowRemoteClose,
         CancellationToken cancellationToken)
     {
-        var heartbeatReplies = 0;
-        DateTimeOffset? lastHeartbeatRequestUtc = null;
+        var serverHeartbeatRequests = 0;
+        var clientHeartbeatRequests = 0;
+        var clientHeartbeatAcks = 0;
+        DateTimeOffset? lastHeartbeatActivityUtc = null;
+        var nextClientHeartbeatUtc = DateTimeOffset.UtcNow + ActiveHeartbeatInterval;
 
         string HeartbeatTelemetry()
         {
-            if (heartbeatReplies == 0 || lastHeartbeatRequestUtc is null)
-                return "kein SH2/4-Heartbeat empfangen/beantwortet";
+            var age = lastHeartbeatActivityUtc is null
+                ? "keine Heartbeat-Aktivität"
+                : $"letzte Heartbeat-Aktivität vor {Math.Max(0, (DateTimeOffset.UtcNow - lastHeartbeatActivityUtc.Value).TotalSeconds):N1}s";
 
-            var age = Math.Max(0, (DateTimeOffset.UtcNow - lastHeartbeatRequestUtc.Value).TotalSeconds);
-            return $"{heartbeatReplies:N0} SH2/4→CH2/5 Heartbeat(s), letzter vor {age:N1}s";
+            return
+                $"aktiv CH2/4={clientHeartbeatRequests:N0}, SH2/5={clientHeartbeatAcks:N0}, " +
+                $"SH2/4→CH2/5={serverHeartbeatRequests:N0}, {age}";
         }
 
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
+                var now = DateTimeOffset.UtcNow;
+                if (now >= nextClientHeartbeatUtc)
+                {
+                    await connection.SendPacketAsync(
+                        2,
+                        4,
+                        ReadOnlyMemory<byte>.Empty,
+                        cancellationToken);
+                    clientHeartbeatRequests++;
+                    lastHeartbeatActivityUtc = DateTimeOffset.UtcNow;
+                    nextClientHeartbeatUtc = lastHeartbeatActivityUtc.Value + ActiveHeartbeatInterval;
+                }
+
+                var untilHeartbeat = nextClientHeartbeatUtc - DateTimeOffset.UtcNow;
+                var readTimeout = untilHeartbeat <= TimeSpan.Zero
+                    ? TimeSpan.FromMilliseconds(250)
+                    : untilHeartbeat < TimeSpan.FromSeconds(10)
+                        ? untilHeartbeat
+                        : TimeSpan.FromSeconds(10);
+
                 var packet = await connection.ReadPacketAsync(
-                    TimeSpan.FromSeconds(10),
+                    readTimeout,
                     cancellationToken);
 
                 if (packet.Header == 2 && packet.Type == 4)
@@ -743,8 +781,15 @@ public sealed class FiestaHeadlessLoadClient
                         5,
                         ReadOnlyMemory<byte>.Empty,
                         cancellationToken);
-                    heartbeatReplies++;
-                    lastHeartbeatRequestUtc = DateTimeOffset.UtcNow;
+                    serverHeartbeatRequests++;
+                    lastHeartbeatActivityUtc = DateTimeOffset.UtcNow;
+                    continue;
+                }
+
+                if (packet.Header == 2 && packet.Type == 5)
+                {
+                    clientHeartbeatAcks++;
+                    lastHeartbeatActivityUtc = DateTimeOffset.UtcNow;
                     continue;
                 }
 
@@ -758,7 +803,7 @@ public sealed class FiestaHeadlessLoadClient
             }
             catch (TimeoutException)
             {
-                // An idle 10-second interval is valid; keep the session alive.
+                // Timeout only advances the loop so an active CH2/4 heartbeat can be sent on time.
             }
             catch (EndOfStreamException) when (allowRemoteClose)
             {
@@ -773,6 +818,24 @@ public sealed class FiestaHeadlessLoadClient
                 throw new EndOfStreamException(
                     $"{role}: Fiesta-Verbindung wurde vom Server geschlossen · {HeartbeatTelemetry()}.",
                     ex);
+            }
+            catch (IOException ex) when (allowRemoteClose)
+            {
+                return;
+            }
+            catch (IOException ex)
+            {
+                throw new IOException(
+                    $"{role}: Fiesta-Verbindung brach während Heartbeat/Holding ab · {HeartbeatTelemetry()}.",
+                    ex);
+            }
+            catch (SocketException) when (allowRemoteClose)
+            {
+                return;
+            }
+            catch (SocketException ex)
+            {
+                throw new SocketException(ex.ErrorCode);
             }
         }
     }
