@@ -87,7 +87,11 @@ public sealed class FiestaHeadlessLoadClient
             {
                 SetStage(FiestaLoadClientStage.WorldConnected);
 
-                await worldConnection.SendPacketAsync(3, 15, BuildWorldTransferBody(options, clientProfile, world.TransferKey), cancellationToken);
+                await worldConnection.SendPacketAsync(
+                    3,
+                    15,
+                    BuildWorldTransferBody(options, clientProfile, credential.Username, world.TransferMaterial),
+                    cancellationToken);
                 var characterList = await WaitForAsync(worldConnection, 3, 20, options.StepTimeout, cancellationToken);
                 if (characterList.Body.Length < 3)
                     throw new InvalidDataException("World CharacterList ist zu kurz.");
@@ -110,7 +114,11 @@ public sealed class FiestaHeadlessLoadClient
                 }
 
                 await worldConnection.SendPacketAsync(4, 1, new[] { credential.Slot }, cancellationToken);
-                var zoneRedirect = await WaitForZoneRedirectAsync(worldConnection, options.StepTimeout, cancellationToken);
+                var zoneRedirect = await WaitForZoneRedirectAsync(
+                    worldConnection,
+                    clientProfile,
+                    options.StepTimeout,
+                    cancellationToken);
                 zone = ParseZoneRedirect(zoneRedirect.Body);
                 SetStage(FiestaLoadClientStage.ZoneRedirectReceived);
             }
@@ -218,15 +226,25 @@ public sealed class FiestaHeadlessLoadClient
             if (parsed.Header != 2 || parsed.Type != 7 || BinaryPrimitives.ReadUInt16LittleEndian(parsed.Body) != 123)
                 throw new InvalidDataException("Handshake-Opcode/Position wird falsch dekodiert.");
 
-            var tutorialDecline = BuildPacketPayload(4, 273, new byte[] { 1 });
-            var tutorialPacket = FiestaPacket.FromPayload(tutorialDecline);
-            if (tutorialPacket.Header != 4 || tutorialPacket.Type != 273
-                || tutorialPacket.Body.Length != 1 || tutorialPacket.Body[0] != 1)
+            var redirectMaterial = Enumerable.Range(0, 64)
+                .Select(i => unchecked((byte)(i * 5 + 3)))
+                .ToArray();
+            var redirectBody = new byte[83];
+            redirectBody[0] = 6;
+            WriteFixedAscii(redirectBody.AsSpan(1, 16), "127.0.0.1");
+            BinaryPrimitives.WriteUInt16LittleEndian(redirectBody.AsSpan(17, 2), 9013);
+            redirectMaterial.CopyTo(redirectBody.AsSpan(19, 64));
+            var redirect = ParseWorldRedirect(redirectBody);
+            if (redirect.Host != "127.0.0.1"
+                || redirect.Port != 9013
+                || !redirect.TransferMaterial.SequenceEqual(redirectMaterial))
             {
-                throw new InvalidDataException("Tutorial-Cancel CH4/273=01 wird falsch erzeugt.");
+                throw new InvalidDataException("Binäres 64-Byte-World-Transfermaterial wird nicht verlustfrei geparst.");
             }
 
-            return new FiestaProtocolSelfTestResult(true, "NA2016 PROTOCOL SELFTEST: PASS · Framing, Opcode, Login-318, XOR und Tutorial-Cancel CH4/273=01 bestätigt.");
+            return new FiestaProtocolSelfTestResult(
+                true,
+                "NA2016 PROTOCOL SELFTEST: PASS · Framing, Opcode, Login-318, XOR und 64-Byte World-Transfermaterial bestätigt.");
         }
         catch (Exception ex)
         {
@@ -262,6 +280,7 @@ public sealed class FiestaHeadlessLoadClient
 
     private static async Task<FiestaPacket> WaitForZoneRedirectAsync(
         FiestaWireConnection connection,
+        FiestaCapturedClientProfile? clientProfile,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
@@ -277,12 +296,23 @@ public sealed class FiestaHeadlessLoadClient
                 continue;
             }
 
-            // Real NA2016 capture: after character selection the World server asks SH4/272
-            // whether to enter the tutorial. The original client "Cancel" response is CH4/273 body 01.
-            // Without this response the original server does not issue SH4/3 ZoneRedirect.
+            // Real NA2016 capture: after character selection the World server may ask SH4/272
+            // whether to enter the tutorial. Replay only the exact CH4/273 Cancel body captured
+            // from the real client instead of inventing a response.
             if (packet.Header == 4 && packet.Type == 272)
             {
-                await connection.SendPacketAsync(4, 273, new byte[] { 1 }, cancellationToken);
+                if (clientProfile is null || !clientProfile.HasCapturedTutorialCancel)
+                {
+                    throw new InvalidOperationException(
+                        "World fordert SH4/272 Tutorial-Entscheidung an, aber das Client-Capture-Profil enthält keine " +
+                        "capture-basierte CH4/273-Cancel-Antwort. Capture mit neuem Charakter und Tutorial-Abbruch erneut importieren.");
+                }
+
+                await connection.SendPacketAsync(
+                    4,
+                    273,
+                    clientProfile.GetTutorialCancelBody(),
+                    cancellationToken);
                 continue;
             }
 
@@ -303,7 +333,7 @@ public sealed class FiestaHeadlessLoadClient
         }
 
         throw new TimeoutException(
-            $"ZoneRedirect SH4/3 wurde innerhalb von {timeout.TotalSeconds:N0}s nicht empfangen (Tutorial SH4/272 wird automatisch mit Cancel CH4/273=01 beantwortet).");
+            $"ZoneRedirect SH4/3 wurde innerhalb von {timeout.TotalSeconds:N0}s nicht empfangen.");
     }
 
     private static async Task<FiestaPacket> WaitForAsync(
@@ -387,7 +417,8 @@ public sealed class FiestaHeadlessLoadClient
     private static byte[] BuildWorldTransferBody(
         FiestaHeadlessProbeOptions options,
         FiestaCapturedClientProfile? profile,
-        byte[] transferKey)
+        string username,
+        byte[] transferMaterial)
     {
         if (profile is not null)
         {
@@ -397,21 +428,21 @@ public sealed class FiestaHeadlessLoadClient
                     "Client-Capture-Profil enthält keinen vollständigen CH3/15 WorldClientKey-Body.");
             }
 
-            return profile.MaterializeWorldClientKeyBody(transferKey);
+            return profile.MaterializeWorldClientKeyBody(username, transferMaterial);
         }
 
         if (!options.AllowEmulatorWorldClientKeyFallback)
         {
             throw new InvalidOperationException(
                 "Für den Original-NA2016-Server ist ein capture-basierter CH3/15 WorldClientKey-Body erforderlich. " +
-                "Der alte 18-Nullbyte-Emulatorfallback wird nicht als Originalserver-Proof verwendet.");
+                "Der Emulatorfallback wird nicht als Originalserver-Proof verwendet.");
         }
 
-        if (transferKey is null || transferKey.Length != 32)
-            throw new InvalidDataException("World-Redirect lieferte keinen vollständigen 32-Byte-Transfer-Key.");
+        if (transferMaterial is null || transferMaterial.Length is not (32 or 64))
+            throw new InvalidDataException("World-Redirect lieferte kein vollständiges 32-/64-Byte-Transfermaterial.");
 
-        var body = new byte[50];
-        transferKey.CopyTo(body.AsSpan(18, 32));
+        var body = new byte[18 + transferMaterial.Length];
+        transferMaterial.CopyTo(body.AsSpan(18));
         return body;
     }
 
@@ -444,10 +475,17 @@ public sealed class FiestaHeadlessLoadClient
             throw new InvalidDataException($"World-Redirect ist zu kurz ({body.Length} Byte). Erwartet werden mindestens 51 Byte.");
         var host = ReadFixedAscii(body.Slice(1, 16));
         var port = BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(17, 2));
-        var key = body.Slice(19, 32).ToArray();
-        if (string.IsNullOrWhiteSpace(host) || port == 0 || key.Length != 32)
-            throw new InvalidDataException("World-Redirect enthält Host, Port oder den 32-Byte-Transfer-Key nicht vollständig.");
-        return new FiestaEndpointRedirect(host, port, key);
+        var materialLength = body.Length >= 83 ? 64 : 32;
+        var transferMaterial = body.Slice(19, materialLength).ToArray();
+        if (string.IsNullOrWhiteSpace(host)
+            || port == 0
+            || transferMaterial.All(x => x == 0))
+        {
+            throw new InvalidDataException(
+                "World-Redirect enthält Host, Port oder das binäre 32-/64-Byte-Transfermaterial nicht vollständig.");
+        }
+
+        return new FiestaEndpointRedirect(host, port, transferMaterial);
     }
 
     private static FiestaEndpointRedirect ParseZoneRedirect(ReadOnlySpan<byte> body)
@@ -498,7 +536,7 @@ public sealed class FiestaHeadlessLoadClient
         return Encoding.ASCII.GetString(source).Trim();
     }
 
-    private sealed record FiestaEndpointRedirect(string Host, int Port, byte[] TransferKey);
+    private sealed record FiestaEndpointRedirect(string Host, int Port, byte[] TransferMaterial);
 }
 
 public enum FiestaLoadClientStage
