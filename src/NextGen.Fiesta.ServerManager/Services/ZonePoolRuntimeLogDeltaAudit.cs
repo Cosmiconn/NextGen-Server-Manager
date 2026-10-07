@@ -324,6 +324,19 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
              || x.Severity.Equals("Critical", StringComparison.OrdinalIgnoreCase)));
 
         var status = blockers > 0 ? "BLOCKED" : incomplete || reviewFindings > 0 ? "REVIEW" : "CLEAN";
+        var blockingDetails = findings
+            .Where(x => x.Blocking)
+            .Take(5)
+            .Select(x => FormatFinding(root, x))
+            .ToArray();
+        var reviewDetails = findings
+            .Where(x => !x.Blocking
+                        && (x.Severity.Equals("Error", StringComparison.OrdinalIgnoreCase)
+                            || x.Severity.Equals("Warning", StringComparison.OrdinalIgnoreCase)
+                            || x.Severity.Equals("Critical", StringComparison.OrdinalIgnoreCase)))
+            .Take(5)
+            .Select(x => FormatFinding(root, x))
+            .ToArray();
 
         return new ZonePoolLogDeltaAuditResult
         {
@@ -345,11 +358,44 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             EvidenceGaps = evidenceGaps,
             Detail = status switch
             {
-                "BLOCKED" => $"LOG DELTA BLOCKED: {blockers} harter Befund in ausschließlich seit dem Checkpoint hinzugekommenen/geänderten Logdaten.",
-                "REVIEW" => $"LOG DELTA REVIEW: keine harte Patch-Crash-Signatur, aber {reviewFindings} Warn-/Fehlerbefund(e) oder {evidenceGaps.Count} Evidenzlücke(n) müssen geprüft werden.",
+                "BLOCKED" =>
+                    $"LOG DELTA BLOCKED: {blockers} harter Befund in ausschließlich seit dem Checkpoint hinzugekommenen/geänderten Logdaten." +
+                    (blockingDetails.Length == 0
+                        ? string.Empty
+                        : Environment.NewLine + "BLOCKER:" + Environment.NewLine + string.Join(Environment.NewLine, blockingDetails)),
+                "REVIEW" =>
+                    $"LOG DELTA REVIEW: keine harte Patch-Crash-Signatur, aber {reviewFindings} Warn-/Fehlerbefund(e) oder {evidenceGaps.Count} Evidenzlücke(n) müssen geprüft werden." +
+                    (reviewDetails.Length == 0
+                        ? string.Empty
+                        : Environment.NewLine + "REVIEW:" + Environment.NewLine + string.Join(Environment.NewLine, reviewDetails)),
                 _ => $"LOG DELTA CLEAN: {changedFiles} geänderte Logdatei(en), davon {rewrittenFiles} bytegenau verglichene Rewrite-Datei(en); keine neuen Warn-/Fehler-/Crashindikatoren."
             }
         };
+    }
+
+    private static string FormatFinding(string serverRoot, ZonePoolLogDeltaFinding finding)
+    {
+        string source;
+        try
+        {
+            source = Path.GetRelativePath(serverRoot, finding.Source);
+        }
+        catch
+        {
+            source = finding.Source;
+        }
+
+        var evidence = (finding.Evidence ?? string.Empty)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+        if (evidence.Length > 500)
+            evidence = evidence[..500] + "…";
+
+        var code = string.IsNullOrWhiteSpace(finding.Code) ? "NO-CODE" : finding.Code;
+        var title = string.IsNullOrWhiteSpace(finding.Title) ? "ohne Titel" : finding.Title;
+        return $"- [{code}] {title} · {source}" +
+               (string.IsNullOrWhiteSpace(evidence) ? string.Empty : Environment.NewLine + "  Evidence: " + evidence);
     }
 
     private bool TryAnalyzeSameLengthRewrite(string path, ZonePoolLogCheckpointEntry old, FileInfo current, List<ZonePoolLogDeltaFinding> findings, out long inspectedBytes, out string detail)
