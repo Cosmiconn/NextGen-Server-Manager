@@ -36,3 +36,21 @@ Wenn die aktuelle CPU tatsächlich ein **E5-2670 v2** ist (10C/20T, 2,5 GHz Basi
 Ein zweiter Sockel macht **eine einzelne Zone nicht doppelt so schnell**. Er ermöglicht mehr Zone-/DB-/Nebenprozesse parallel. Der Manager soll daher bei zwei NUMA-Nodes einzelne Zone-Prozesse möglichst node-lokal bewerten und später optional Affinitäts-/NUMA-Empfehlungen erzeugen.
 
 Quellen: Dell PowerEdge R720/R720xd Technical Guide; Dell R720 Owner's Manual; Intel ARK E5-2667 v2 / E5-2690 v2 / E5-2697 v2.
+
+
+## Hardware-aware CPU-Affinity im Manager
+
+Der Manager kann Fiesta-Prozesse jetzt auf Basis der echten Windows-Topologie planen und pinnen:
+
+- physische Cores werden über `GetLogicalProcessorInformationEx` erkannt;
+- SMT-/Hyper-Threading-Geschwister bleiben als Einheit zusammen und werden nicht als zwei unabhängige physische Cores behandelt;
+- WorldManager, Login, Character und Account erhalten nach Möglichkeit getrennte physische Core-Lanes;
+- laufende Zone-Prozesse werden auf eigene, innerhalb eines NUMA-Nodes liegende Core-Masken verteilt;
+- wenn nur eine Zone läuft und genügend Reserve vorhanden ist, erhält sie zwei physische Cores als Prozess-Affinity, damit Neben-/Netzwerkthreads nicht mit World/Login/Character um denselben physischen Core konkurrieren;
+- AccountLog, GameLog und GamigoZR teilen sich bewusst die Hintergrund-Lane;
+- bei zu wenigen physischen Cores wird die Teilung in der UI ausdrücklich angezeigt statt Exklusivität vorzutäuschen;
+- Systeme mit mehr als 64 logischen CPUs bzw. mehreren Windows Processor Groups werden derzeit fail-closed nicht automatisch gepinnt.
+
+Die Option **„Nach Service-/Prozess-Neustart automatisch erneut anwenden“** prüft die PIDs bei jedem Status-Refresh und setzt die geplante Affinity nur dann erneut, wenn Windows bzw. ein Service-Neustart sie verändert hat.
+
+Wichtig: Dies ist Prozess-Affinity, kein Binary-Hook. Ziel ist reproduzierbare Isolation; ein einzelner Zone-Mainthread bleibt weiterhin durch seine eigene Single-Core-Leistung begrenzt.
