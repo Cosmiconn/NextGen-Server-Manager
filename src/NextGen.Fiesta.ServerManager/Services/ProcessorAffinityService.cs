@@ -347,7 +347,7 @@ public sealed class ProcessorAffinityService
             var cores = new List<CpuPhysicalCore>();
             var offset = 0;
             var multiGroup = false;
-            while (offset < length)
+            while ((uint)offset < length)
             {
                 var item = IntPtr.Add(buffer, offset);
                 var relationship = Marshal.ReadInt32(item, 0);
