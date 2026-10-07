@@ -33,6 +33,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly PerformanceTuningAuditService _performanceTuningAudit = new();
     private readonly AdaptiveHookService _adaptiveHook = new();
     private readonly HardwareAdvisorService _hardwareAdvisor = new();
+    private readonly ProcessorAffinityService _processorAffinity = new();
     private readonly DispatcherTimer _timer;
     private readonly WindowsServiceManager _serviceManager;
     private readonly ZoneLifecycleService _lifecycle;
@@ -69,6 +70,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _performanceTuningSummary = "Noch keine Performance-/Tuning-Analyse ausgeführt";
     private string _adaptiveHookSummary = "Noch keine Adaptive-Hook-Bewertung ausgeführt";
     private HardwareProfileSnapshot _hardwareProfile = new();
+    private string _cpuAffinitySummary = "CPU-Affinity noch nicht analysiert";
 
     public ObservableCollection<FiestaServiceEntry> Services { get; } = new();
     public ObservableCollection<DiagnosticIssue> Diagnostics { get; } = new();
@@ -84,6 +86,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<ProcessScalingSnapshot> ProcessScaling { get; } = new();
     public ObservableCollection<PerformanceTuningEntry> PerformanceTuningCandidates { get; } = new();
     public ObservableCollection<AdaptiveHookAssessment> AdaptiveHookAssessments { get; } = new();
+    public ObservableCollection<ProcessAffinityPlanEntry> CpuAffinityPlan { get; } = new();
 
     public AppSettings Settings { get => _settings; private set { _settings = value; OnPropertyChanged(); OnPropertyChanged(nameof(ServerRoot)); } }
     public string ServerRoot { get => Settings.ServerRoot; set { Settings.ServerRoot = value; OnPropertyChanged(); } }
@@ -136,6 +139,21 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string HardwareSummary => HardwareProfile.Summary;
     public string HardwareAdvice => HardwareProfile.Advice;
     public string HardwareScalingMode => HardwareProfile.ScalingMode;
+    public string CpuAffinitySummary { get => _cpuAffinitySummary; private set { _cpuAffinitySummary = value; OnPropertyChanged(); } }
+    public bool AutoApplyCpuAffinity
+    {
+        get => Settings.AutoApplyCpuAffinity;
+        set
+        {
+            if (Settings.AutoApplyCpuAffinity == value) return;
+            Settings.AutoApplyCpuAffinity = value;
+            _settingsService.Save(Settings);
+            OnPropertyChanged();
+            CpuAffinitySummary = value
+                ? "Auto-Apply aktiviert · Affinity wird nach Prozess-/Service-Neustarts beim Status-Refresh erneut geprüft."
+                : "Auto-Apply deaktiviert · bestehende Windows-Affinity bleibt unverändert, bis ein neuer Plan angewendet wird.";
+        }
+    }
 
     public int HookWmClientTarget { get => Settings.HookWorldManagerClientSessions; set { Settings.HookWorldManagerClientSessions = Math.Clamp(value, 1, 20000); PersistHookSetting(); OnPropertyChanged(); } }
     public int HookWmZoneTarget { get => Settings.HookWorldManagerZoneSessions; set { Settings.HookWorldManagerZoneSessions = Math.Clamp(value, 1, 1000); PersistHookSetting(); OnPropertyChanged(); } }
@@ -180,6 +198,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public AsyncRelayCommand PlanNewZoneCommand { get; }
     public AsyncRelayCommand CreateNewZoneCommand { get; }
     public ICommand AnalyzePerformanceTuningCommand { get; }
+    public ICommand AnalyzeCpuAffinityCommand { get; }
+    public AsyncRelayCommand ApplyCpuAffinityCommand { get; }
     public ICommand AnalyzeAdaptiveHooksCommand { get; }
     public AsyncRelayCommand ApplyAdaptiveHooksCommand { get; }
     public ICommand RestoreAdaptiveHooksCommand { get; }
@@ -232,6 +252,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         PlanNewZoneCommand = new AsyncRelayCommand(_ => PlanNewZoneAsync(), _ => Services.Any(x => x.Kind == FiestaServiceKind.Zone));
         CreateNewZoneCommand = new AsyncRelayCommand(_ => CreateNewZoneAsync(), _ => IsAdministrator && ProvisionPlan?.IsValid == true);
         AnalyzePerformanceTuningCommand = new RelayCommand(_ => AnalyzePerformanceTuning());
+        AnalyzeCpuAffinityCommand = new RelayCommand(_ => AnalyzeCpuAffinity());
+        ApplyCpuAffinityCommand = new AsyncRelayCommand(_ => ApplyCpuAffinityAsync(), _ => IsAdministrator && Services.Any(x => x.State == ServiceRuntimeState.Running));
         AnalyzeAdaptiveHooksCommand = new RelayCommand(_ => AnalyzeAdaptiveHooks());
         ApplyAdaptiveHooksCommand = new AsyncRelayCommand(_ => ApplyAdaptiveHooksAsync(), _ => IsAdministrator && Services.Count > 0);
         RestoreAdaptiveHooksCommand = new RelayCommand(_ => RestoreAdaptiveHooks(), _ => IsAdministrator && !string.IsNullOrWhiteSpace(ServerRoot));
@@ -279,6 +301,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         AnalyzeClientTerrain();
         RefreshZoneCapacity();
         AnalyzePerformanceTuning();
+        AnalyzeCpuAffinity();
         AnalyzeAdaptiveHooks();
         _ = PlanNewZoneAsync(silent: true);
         if (Settings.AutoAnalyzeLogs) StartLiveMonitoring();
@@ -323,6 +346,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             HealthScore = _health.Score(Services);
             RefreshZoneCapacity();
             AnalyzePerformanceTuning(silent: true);
+            AnalyzeCpuAffinity(silent: true);
+            if (AutoApplyCpuAffinity && IsAdministrator)
+            {
+                var affinityResult = _processorAffinity.ApplyPlan(Services.ToList());
+                UpdateCpuAffinityPlan(affinityResult.Plan);
+                CpuAffinitySummary = affinityResult.Detail;
+            }
             AnalyzeAdaptiveHooks(silent: true);
             RefreshCorrelations();
             if (!silent) StatusLine = $"Status aktualisiert: {DateTime.Now:HH:mm:ss}";
@@ -464,6 +494,50 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             PerformanceTuningSummary = "Performance-/Tuning-Analyse fehlgeschlagen: " + ex.Message;
             if (!silent) StatusLine = PerformanceTuningSummary;
         }
+    }
+
+    private void AnalyzeCpuAffinity(bool silent = false)
+    {
+        try
+        {
+            var plan = _processorAffinity.BuildPlan(Services.ToList());
+            UpdateCpuAffinityPlan(plan);
+            CpuAffinitySummary = plan.Summary +
+                (AutoApplyCpuAffinity ? " · Auto-Apply EIN" : " · Auto-Apply AUS");
+            if (!silent) StatusLine = CpuAffinitySummary;
+        }
+        catch (Exception ex)
+        {
+            CpuAffinitySummary = "CPU-Affinity-Analyse fehlgeschlagen: " + ex.Message;
+            if (!silent) StatusLine = CpuAffinitySummary;
+        }
+    }
+
+    private async Task ApplyCpuAffinityAsync()
+    {
+        IsBusy = true;
+        try
+        {
+            var result = await Task.Run(() => _processorAffinity.ApplyPlan(Services.ToList()));
+            UpdateCpuAffinityPlan(result.Plan);
+            CpuAffinitySummary = result.Detail;
+            StatusLine = result.Detail;
+            AppendActivity($"[{DateTime.Now:HH:mm:ss}] {result.Detail}");
+            if (!result.Success)
+                System.Windows.MessageBox.Show(result.Detail, "CPU-Affinity", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsBusy = false;
+            RaiseCommands();
+        }
+    }
+
+    private void UpdateCpuAffinityPlan(CpuAffinityPlan plan)
+    {
+        CpuAffinityPlan.Clear();
+        foreach (var entry in plan.Entries)
+            CpuAffinityPlan.Add(entry);
     }
 
     private void PersistHookSetting()
@@ -1107,6 +1181,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         (StartLiveCommand as RelayCommand)?.RaiseCanExecuteChanged(); (StopLiveCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (ReloadLogCommand as RelayCommand)?.RaiseCanExecuteChanged(); (ExportReportCommand as RelayCommand)?.RaiseCanExecuteChanged();
         RefreshZoneCapacityCommand.RaiseCanExecuteChanged(); PlanNewZoneCommand.RaiseCanExecuteChanged(); CreateNewZoneCommand.RaiseCanExecuteChanged();
+        ApplyCpuAffinityCommand.RaiseCanExecuteChanged();
         ApplyAdaptiveHooksCommand.RaiseCanExecuteChanged(); (RestoreAdaptiveHooksCommand as RelayCommand)?.RaiseCanExecuteChanged();
     }
 
