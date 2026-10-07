@@ -46,104 +46,58 @@ public sealed class FiestaHeadlessLoadClient
                 ? null
                 : FiestaCapturedClientProfile.Load(options.ClientCaptureProfilePath);
 
-            FiestaEndpointRedirect world;
-            await using (var login = await FiestaWireConnection.ConnectAsync(
-                             options.LoginHost,
-                             options.LoginPort,
-                             options.StepTimeout,
-                             cancellationToken))
+            FiestaEndpointRedirect? zone = null;
+            ushort randomId = 0;
+            byte characterCount = 0;
+            FiestaEndpointRedirect? finalWorld = null;
+
+            // A newly created NA2016 character is persisted by Character.exe before WorldManager's
+            // current client-session character cache is guaranteed to be authoritative. The real
+            // server logs can otherwise reach Zone with WorldCharName=NULL. Therefore a fresh create
+            // is deliberately followed by one clean Login -> World reconnect, then the target slot is
+            // resolved from the new SH3/20 CharacterList before CH4/1 is sent.
+            for (var worldPass = 0; worldPass < 2 && zone is null; worldPass++)
             {
-                SetStage(FiestaLoadClientStage.LoginConnected);
-
-                await login.SendPacketAsync(3, 101, BuildVersionBody(options, clientProfile), cancellationToken);
-                await WaitForAsync(login, 3, 103, options.StepTimeout, cancellationToken);
-                SetStage(FiestaLoadClientStage.VersionAccepted);
-
-                // Real NA2016 login capture order is significant:
-                // CH3/90 Login is sent first, then CH3/4 FileHash. The server acknowledges
-                // CH3/4 with SH3/5 and only afterwards emits SH3/10 LoginAccepted.
-                // Sending CH3/4 before CH3/90 makes the original Login server close the socket.
-                var authenticationPackets = BuildLoginAuthenticationPackets(
+                var world = await LoginAndGetWorldRedirectAsync(
                     options,
-                    clientProfile,
                     credential,
-                    passwordMd5);
-
-                await login.SendPacketAsync(
-                    authenticationPackets[0].Header,
-                    authenticationPackets[0].Type,
-                    authenticationPackets[0].Body,
-                    cancellationToken);
-
-                if (authenticationPackets.Count > 1)
-                {
-                    await login.SendPacketAsync(
-                        authenticationPackets[1].Header,
-                        authenticationPackets[1].Type,
-                        authenticationPackets[1].Body,
-                        cancellationToken);
-                    await WaitForAsync(login, 3, 5, options.StepTimeout, cancellationToken);
-                }
-
-                await WaitForLoginAcceptedAsync(
-                    login,
-                    credential.Username,
-                    options.StepTimeout,
-                    cancellationToken);
-                SetStage(FiestaLoadClientStage.LoginAuthenticated);
-
-                await login.SendPacketAsync(3, 11, new[] { options.WorldId }, cancellationToken);
-                var worldRedirect = await WaitForAsync(login, 3, 12, options.StepTimeout, cancellationToken);
-                world = ParseWorldRedirect(worldRedirect.Body);
-                SetStage(FiestaLoadClientStage.WorldRedirectReceived);
-            }
-
-            FiestaEndpointRedirect zone;
-            ushort randomId;
-            byte characterCount;
-            await using (var worldConnection = await FiestaWireConnection.ConnectAsync(
-                             world.Host,
-                             world.Port,
-                             options.StepTimeout,
-                             cancellationToken))
-            {
-                SetStage(FiestaLoadClientStage.WorldConnected);
-
-                await worldConnection.SendPacketAsync(
-                    3,
-                    15,
-                    BuildWorldTransferBody(options, clientProfile, credential.Username, world.TransferMaterial),
-                    cancellationToken);
-                var characterList = await WaitForAsync(worldConnection, 3, 20, options.StepTimeout, cancellationToken);
-                if (characterList.Body.Length < 3)
-                    throw new InvalidDataException("World CharacterList ist zu kurz.");
-
-                randomId = BinaryPrimitives.ReadUInt16LittleEndian(characterList.Body.AsSpan(0, 2));
-                characterCount = characterList.Body[2];
-                if (characterCount == 0)
-                {
-                    if (!credential.CreateCharacterIfMissing)
-                        throw new InvalidOperationException("Der Testaccount besitzt keinen Charakter und Auto-Create ist nicht freigegeben.");
-                    if (string.IsNullOrWhiteSpace(options.CharacterCreateTemplatePath))
-                        throw new InvalidOperationException("Auto-Create benötigt ein capture-basiertes CH5/1 CharacterCreate-Template.");
-
-                    var createTemplate = FiestaCharacterCreateTemplate.Load(options.CharacterCreateTemplatePath);
-                    var createPayload = createTemplate.Materialize(credential.Slot, credential.CharacterName);
-                    await worldConnection.SendDecryptedPayloadAsync(createPayload, cancellationToken);
-                    await WaitForAsync(worldConnection, 5, 6, options.StepTimeout, cancellationToken);
-                    characterCount = 1;
-                    SetStage(FiestaLoadClientStage.CharacterCreated);
-                }
-
-                await worldConnection.SendPacketAsync(4, 1, new[] { credential.Slot }, cancellationToken);
-                var zoneRedirect = await WaitForZoneRedirectAsync(
-                    worldConnection,
+                    passwordMd5,
                     clientProfile,
-                    options.StepTimeout,
-                    cancellationToken);
-                zone = ParseZoneRedirect(zoneRedirect.Body);
-                SetStage(FiestaLoadClientStage.ZoneRedirectReceived);
+                    cancellationToken,
+                    SetStage);
+                finalWorld = world;
+
+                var worldResult = await PrepareWorldEntryAsync(
+                    world,
+                    options,
+                    credential,
+                    clientProfile,
+                    allowCharacterCreate: worldPass == 0,
+                    cancellationToken,
+                    SetStage);
+
+                randomId = worldResult.RandomId;
+                characterCount = worldResult.CharacterCount;
+
+                if (worldResult.CharacterCreated)
+                {
+                    SetStage(
+                        FiestaLoadClientStage.CharacterCreated,
+                        $"'{credential.CharacterName}' wurde erstellt; World-Session wird zur autoritativen CharacterList neu aufgebaut.");
+                    continue;
+                }
+
+                zone = worldResult.Zone
+                       ?? throw new InvalidDataException("World-Pass lieferte weder CharacterCreated noch ZoneRedirect.");
             }
+
+            if (zone is null || finalWorld is null)
+            {
+                throw new InvalidOperationException(
+                    $"Charakter '{credential.CharacterName}' konnte nach der Erstellung nicht aus einer frischen SH3/20-CharacterList ausgewählt werden.");
+            }
+
+            SetStage(FiestaLoadClientStage.ZoneRedirectReceived);
 
             await using var zoneConnection = await FiestaWireConnection.ConnectAsync(
                 zone.Host,
@@ -175,8 +129,8 @@ public sealed class FiestaHeadlessLoadClient
             {
                 Success = true,
                 Stage = stage,
-                WorldHost = world.Host,
-                WorldPort = world.Port,
+                WorldHost = finalWorld.Host,
+                WorldPort = finalWorld.Port,
                 ZoneHost = zone.Host,
                 ZonePort = zone.Port,
                 RandomId = randomId,
@@ -291,13 +245,244 @@ public sealed class FiestaHeadlessLoadClient
                 throw new InvalidDataException("Binäres 64-Byte-World-Transfermaterial wird nicht verlustfrei geparst.");
             }
 
+            var listBody = new byte[3 + 2 * 130];
+            BinaryPrimitives.WriteUInt16LittleEndian(listBody.AsSpan(0, 2), 6000);
+            listBody[2] = 2;
+            BinaryPrimitives.WriteUInt32LittleEndian(listBody.AsSpan(3, 4), 2);
+            WriteFixedAscii(listBody.AsSpan(7, 20), "FirstChar");
+            BinaryPrimitives.WriteUInt32LittleEndian(listBody.AsSpan(133, 4), 8);
+            WriteFixedAscii(listBody.AsSpan(137, 20), "NGCap01");
+            var list = ParseCharacterList(listBody);
+            if (list.RandomId != 6000
+                || list.CharacterCount != 2
+                || list.Characters.Count != 2
+                || list.Characters[1].Slot != 1
+                || list.Characters[1].CharacterNumber != 8
+                || list.Characters[1].CharacterName != "NGCap01"
+                || GetNextCharacterCreateSlot(list) != 2)
+            {
+                throw new InvalidDataException("SH3/20 CharacterList/Slot-Auswertung ist falsch.");
+            }
+
+            var createAck = new byte[131];
+            createAck[0] = 1;
+            BinaryPrimitives.WriteUInt32LittleEndian(createAck.AsSpan(1, 4), 9);
+            WriteFixedAscii(createAck.AsSpan(5, 20), "NGL000001");
+            ValidateCharacterCreateAck(createAck, "NGL000001");
+
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Framing, Opcode, Login-318, CH3/90→CH3/4 Reihenfolge, XOR und 64-Byte World-Transfermaterial bestätigt.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin-Strategie · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
             return new FiestaProtocolSelfTestResult(false, "NA2016 PROTOCOL SELFTEST: FAIL · " + ex.Message);
+        }
+    }
+
+    private static async Task<FiestaEndpointRedirect> LoginAndGetWorldRedirectAsync(
+        FiestaHeadlessProbeOptions options,
+        FiestaLoadClientCredential credential,
+        string passwordMd5,
+        FiestaCapturedClientProfile? clientProfile,
+        CancellationToken cancellationToken,
+        Action<FiestaLoadClientStage, string> setStage)
+    {
+        await using var login = await FiestaWireConnection.ConnectAsync(
+            options.LoginHost,
+            options.LoginPort,
+            options.StepTimeout,
+            cancellationToken);
+        setStage(FiestaLoadClientStage.LoginConnected, string.Empty);
+
+        await login.SendPacketAsync(3, 101, BuildVersionBody(options, clientProfile), cancellationToken);
+        await WaitForAsync(login, 3, 103, options.StepTimeout, cancellationToken);
+        setStage(FiestaLoadClientStage.VersionAccepted, string.Empty);
+
+        var authenticationPackets = BuildLoginAuthenticationPackets(
+            options,
+            clientProfile,
+            credential,
+            passwordMd5);
+
+        await login.SendPacketAsync(
+            authenticationPackets[0].Header,
+            authenticationPackets[0].Type,
+            authenticationPackets[0].Body,
+            cancellationToken);
+
+        if (authenticationPackets.Count > 1)
+        {
+            await login.SendPacketAsync(
+                authenticationPackets[1].Header,
+                authenticationPackets[1].Type,
+                authenticationPackets[1].Body,
+                cancellationToken);
+            await WaitForAsync(login, 3, 5, options.StepTimeout, cancellationToken);
+        }
+
+        await WaitForLoginAcceptedAsync(
+            login,
+            credential.Username,
+            options.StepTimeout,
+            cancellationToken);
+        setStage(FiestaLoadClientStage.LoginAuthenticated, string.Empty);
+
+        await login.SendPacketAsync(3, 11, new[] { options.WorldId }, cancellationToken);
+        var worldRedirect = await WaitForAsync(login, 3, 12, options.StepTimeout, cancellationToken);
+        var world = ParseWorldRedirect(worldRedirect.Body);
+        setStage(FiestaLoadClientStage.WorldRedirectReceived, string.Empty);
+        return world;
+    }
+
+    private static async Task<FiestaWorldEntryResult> PrepareWorldEntryAsync(
+        FiestaEndpointRedirect world,
+        FiestaHeadlessProbeOptions options,
+        FiestaLoadClientCredential credential,
+        FiestaCapturedClientProfile? clientProfile,
+        bool allowCharacterCreate,
+        CancellationToken cancellationToken,
+        Action<FiestaLoadClientStage, string> setStage)
+    {
+        await using var worldConnection = await FiestaWireConnection.ConnectAsync(
+            world.Host,
+            world.Port,
+            options.StepTimeout,
+            cancellationToken);
+        setStage(FiestaLoadClientStage.WorldConnected, string.Empty);
+
+        await worldConnection.SendPacketAsync(
+            3,
+            15,
+            BuildWorldTransferBody(options, clientProfile, credential.Username, world.TransferMaterial),
+            cancellationToken);
+
+        var characterListPacket = await WaitForAsync(
+            worldConnection,
+            3,
+            20,
+            options.StepTimeout,
+            cancellationToken);
+        var characterList = ParseCharacterList(characterListPacket.Body);
+
+        // Real capture sends CH2/13 GameTime immediately after SH3/20 and receives SH2/14
+        // before create/select. Keep the original state transition instead of skipping it.
+        await worldConnection.SendPacketAsync(2, 13, ReadOnlyMemory<byte>.Empty, cancellationToken);
+        await WaitForAsync(worldConnection, 2, 14, options.StepTimeout, cancellationToken);
+
+        var target = characterList.Characters.FirstOrDefault(x =>
+            x.CharacterName.Equals(credential.CharacterName, StringComparison.OrdinalIgnoreCase));
+        if (target is not null)
+        {
+            await worldConnection.SendPacketAsync(4, 1, new[] { target.Slot }, cancellationToken);
+            var zoneRedirect = await WaitForZoneRedirectAsync(
+                worldConnection,
+                clientProfile,
+                options.StepTimeout,
+                cancellationToken);
+            return new FiestaWorldEntryResult(
+                ParseZoneRedirect(zoneRedirect.Body),
+                characterList.RandomId,
+                characterList.CharacterCount,
+                CharacterCreated: false);
+        }
+
+        if (!allowCharacterCreate || !credential.CreateCharacterIfMissing)
+        {
+            throw new InvalidOperationException(
+                $"Charakter '{credential.CharacterName}' ist in der autoritativen SH3/20-Liste nicht vorhanden.");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.CharacterCreateTemplatePath))
+        {
+            throw new InvalidOperationException(
+                "Auto-Create benötigt ein capture-basiertes CH5/1 CharacterCreate-Template.");
+        }
+
+        var createSlot = GetNextCharacterCreateSlot(characterList);
+        var createTemplate = FiestaCharacterCreateTemplate.Load(options.CharacterCreateTemplatePath);
+        var createPayload = createTemplate.Materialize(createSlot, credential.CharacterName);
+        await worldConnection.SendDecryptedPayloadAsync(createPayload, cancellationToken);
+
+        var createAck = await WaitForAsync(
+            worldConnection,
+            5,
+            6,
+            options.StepTimeout,
+            cancellationToken);
+        ValidateCharacterCreateAck(createAck.Body, credential.CharacterName);
+
+        return new FiestaWorldEntryResult(
+            Zone: null,
+            RandomId: characterList.RandomId,
+            CharacterCount: checked((byte)(characterList.CharacterCount + 1)),
+            CharacterCreated: true);
+    }
+
+    private static FiestaCharacterListSnapshot ParseCharacterList(ReadOnlySpan<byte> body)
+    {
+        const int recordSize = 130;
+        const int nameOffset = 4;
+        const int nameLength = 20;
+
+        if (body.Length < 3)
+            throw new InvalidDataException("SH3/20 CharacterList ist kürzer als 3 Byte.");
+
+        var randomId = BinaryPrimitives.ReadUInt16LittleEndian(body[..2]);
+        var count = body[2];
+        var requiredLength = 3 + count * recordSize;
+        if (body.Length < requiredLength)
+        {
+            throw new InvalidDataException(
+                $"SH3/20 CharacterList meldet {count} Charaktere, enthält aber nur {body.Length} statt mindestens {requiredLength} Byte.");
+        }
+
+        var characters = new List<FiestaCharacterListEntry>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var record = body.Slice(3 + index * recordSize, recordSize);
+            var characterNumber = BinaryPrimitives.ReadUInt32LittleEndian(record[..4]);
+            var characterName = ReadFixedAscii(record.Slice(nameOffset, nameLength));
+            if (characterNumber == 0 || string.IsNullOrWhiteSpace(characterName))
+            {
+                throw new InvalidDataException(
+                    $"SH3/20 CharacterList-Eintrag {index} enthält keinen gültigen CharNo/CharName.");
+            }
+
+            characters.Add(new FiestaCharacterListEntry(
+                checked((byte)index),
+                characterNumber,
+                characterName));
+        }
+
+        return new FiestaCharacterListSnapshot(randomId, count, characters);
+    }
+
+    private static byte GetNextCharacterCreateSlot(FiestaCharacterListSnapshot list)
+    {
+        // The original capture had two existing records and created the third character with
+        // CH5/1 slot=2. SH3/20 is compact and ordered by slot, so appending at CharacterCount
+        // reproduces the observed client behavior while avoiding collisions with occupied slots.
+        if (list.CharacterCount >= 10)
+            throw new InvalidOperationException("Der Testaccount hat bereits 10 Charaktere; kein Auto-Create-Slot ist frei.");
+        return list.CharacterCount;
+    }
+
+    private static void ValidateCharacterCreateAck(ReadOnlySpan<byte> body, string expectedCharacterName)
+    {
+        // Real SH5/6: byte result + 130-byte character record.
+        if (body.Length < 131)
+            throw new InvalidDataException($"SH5/6 CharacterCreate-Ack ist zu kurz ({body.Length} Byte).");
+        if (body[0] != 1)
+            throw new InvalidDataException($"SH5/6 CharacterCreate-Ack meldet Result={body[0]} statt Erfolg=1.");
+
+        var characterNumber = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(1, 4));
+        var characterName = ReadFixedAscii(body.Slice(5, 20));
+        if (characterNumber == 0
+            || !characterName.Equals(expectedCharacterName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"SH5/6 bestätigte CharNo={characterNumber}, Name='{characterName}' statt '{expectedCharacterName}'.");
         }
     }
 
@@ -641,6 +826,22 @@ public sealed class FiestaHeadlessLoadClient
     }
 
     private sealed record FiestaOutboundPacket(int Header, int Type, byte[] Body);
+
+    private sealed record FiestaCharacterListEntry(
+        byte Slot,
+        uint CharacterNumber,
+        string CharacterName);
+
+    private sealed record FiestaCharacterListSnapshot(
+        ushort RandomId,
+        byte CharacterCount,
+        IReadOnlyList<FiestaCharacterListEntry> Characters);
+
+    private sealed record FiestaWorldEntryResult(
+        FiestaEndpointRedirect? Zone,
+        ushort RandomId,
+        byte CharacterCount,
+        bool CharacterCreated);
 
     private sealed record FiestaEndpointRedirect(string Host, int Port, byte[] TransferMaterial);
 }
