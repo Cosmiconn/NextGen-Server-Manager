@@ -703,9 +703,9 @@ public partial class MainWindow
                 },
                 StageTargets = singleClientOnly
                     ? new[] { 1 }
-                    : new[] { 1, 10, 100, 500, 1000, 1450, 1510, 1600 },
+                    : FiestaLoadRampOptions.DiagnosticStageTargets,
                 ClientStartInterval = singleClientOnly ? TimeSpan.Zero : TimeSpan.FromSeconds(1),
-                StageReadyTimeout = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(8),
+                StageReadyTimeout = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(3),
                 StageSettleTime = singleClientOnly ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(10),
                 SessionHoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(2),
                 FinalStabilityDuration = TimeSpan.FromMinutes(5),
@@ -725,7 +725,7 @@ public partial class MainWindow
 
             SetZoneLoadStatus(singleClientOnly
                 ? "1-Client-Probe läuft 5 Minuten: Login → World → Zone → ShinePlayer + Log-Audit …"
-                : "Load-Ramp läuft: 1 → 10 → 100 → 500 → 1000 → 1450 → 1510 → 1600 · 1-s Starttakt · StepTimeout 60 s · r_-World-Retry nur vor SH3/20 bei SH4/2/Timeout/RemoteClose · 5-Min-Stabilität + Log-Audit …");
+                : "Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · 1-s Starttakt · 3-min Ready-Budget je Stufe · Holding-Disconnects melden Heartbeat-Telemetrie · 5-Min-Stabilität + Log-Audit …");
 
             var result = await new FiestaLoadRampCoordinator().RunAsync(
                 options,
