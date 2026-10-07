@@ -89,6 +89,11 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(identitySelfTest.Detail);
             Log("LOAD_IDENTITY_SELFTEST PASS · " + identitySelfTest.Detail);
 
+            var listenerRewriteSelfTest = ZoneClientListenerTestConfiguration.RunRewriteSelfTest();
+            if (!listenerRewriteSelfTest.Success)
+                throw new InvalidOperationException(listenerRewriteSelfTest.Detail);
+            Log("ZONE_LISTENER_REWRITE_SELFTEST PASS · " + listenerRewriteSelfTest.Detail);
+
             var originalWidth = window.Width;
             var originalHeight = window.Height;
             var targets = new (double Width, double Height)[]

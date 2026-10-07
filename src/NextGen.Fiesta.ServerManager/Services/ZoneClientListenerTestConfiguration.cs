@@ -28,7 +28,7 @@ public sealed class ZoneClientListenerTestConfiguration
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex ServerInfoLineRx = new(
-        "^(?<prefix>\\s*SERVER_INFO\\s+\"(?<name>[^\"]+)\"\\s*,\\s*(?<type>-?\\d+)\\s*,\\s*(?<world>-?\\d+)\\s*,\\s*(?<zone>-?\\d+)\\s*,\\s*(?<kind>-?\\d+)\\s*,\\s*\"(?<host>[^\"]+)\"\\s*,\\s*(?<port>\\d+)\\s*,\\s*(?<backlog>\\d+)\\s*,\\s*)(?<maxaccept>\\d+)(?<suffix>[^\\r\\n]*)$",
+        "^(?<prefix>\\s*SERVER_INFO\\s+\"(?<name>[^\"]+)\"\\s*,\\s*(?<type>-?\\d+)\\s*,\\s*(?<world>-?\\d+)\\s*,\\s*(?<zone>-?\\d+)\\s*,\\s*(?<kind>-?\\d+)\\s*,\\s*\"(?<host>[^\"]+)\"\\s*,\\s*(?<port>\\d+)\\s*,\\s*(?<backlog>\\d+)\\s*,\\s*)(?<maxaccept>\\d+)(?<suffix>[^\\r\\n]*)(?<cr>\\r?)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline);
 
     private readonly ServerInfoParser _parser = new();
@@ -450,6 +450,64 @@ public sealed class ZoneClientListenerTestConfiguration
         };
     }
 
+    public static ZoneClientListenerRewriteSelfTestResult RunRewriteSelfTest()
+    {
+        try
+        {
+            const string crlf =
+                "#DEFINE SERVER_INFO\r\n" +
+                "SERVER_INFO  \"PG_W00_Z00\",   6, 0, 0,20,  \"127.0.0.1\",  \t9016,  100,  1500  ; \tPUBLIC_IP\r\n" +
+                "SERVER_INFO  \"PG_W00_Z00\",   6, 0, 0, 6,  \"127.0.0.1\",  \t9017,    1,    30  ; \tLOCALHOST\r\n" +
+                "SERVER_INFO  \"PG_W00_Z01\",   6, 0, 1,20,  \"127.0.0.1\",  \t9019,  100,  1500  ; \tPUBLIC_IP\r\n";
+
+            var target = new ServerInfoEntry(
+                "PG_W00_Z00",
+                6,
+                0,
+                0,
+                ZoneClientConnectionKind,
+                "127.0.0.1",
+                9016,
+                100,
+                StockMaxAccept);
+
+            var rewritten = RewriteTarget(crlf, target, CertifiedMaxAccept);
+            if (!rewritten.Success || rewritten.ChangedCount != 1)
+                throw new InvalidDataException("CRLF-NA2016-Zielzeile wurde nicht exakt einmal geändert: " + rewritten.Detail);
+
+            const string expected =
+                "#DEFINE SERVER_INFO\r\n" +
+                "SERVER_INFO  \"PG_W00_Z00\",   6, 0, 0,20,  \"127.0.0.1\",  \t9016,  100,  2000  ; \tPUBLIC_IP\r\n" +
+                "SERVER_INFO  \"PG_W00_Z00\",   6, 0, 0, 6,  \"127.0.0.1\",  \t9017,    1,    30  ; \tLOCALHOST\r\n" +
+                "SERVER_INFO  \"PG_W00_Z01\",   6, 0, 1,20,  \"127.0.0.1\",  \t9019,  100,  1500  ; \tPUBLIC_IP\r\n";
+
+            if (!string.Equals(rewritten.Text, expected, StringComparison.Ordinal))
+                throw new InvalidDataException("Rewrite veränderte außer nMaxAccept auch Whitespace/CRLF oder eine fremde Zone.");
+
+            var lf = crlf.Replace("\r\n", "\n", StringComparison.Ordinal);
+            var lfRewrite = RewriteTarget(lf, target, CertifiedMaxAccept);
+            if (!lfRewrite.Success
+                || lfRewrite.ChangedCount != 1
+                || !string.Equals(
+                    lfRewrite.Text,
+                    expected.Replace("\r\n", "\n", StringComparison.Ordinal),
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("LF-Variante des Listener-Rewrite ist nicht byteformstabil.");
+            }
+
+            return new ZoneClientListenerRewriteSelfTestResult(
+                true,
+                "ZONE LISTENER REWRITE SELFTEST: PASS · NA2016 CRLF/LF · exakt eine Zone00-Clientzeile 1500→2000 · Zeilenenden unverändert.");
+        }
+        catch (Exception ex)
+        {
+            return new ZoneClientListenerRewriteSelfTestResult(
+                false,
+                "ZONE LISTENER REWRITE SELFTEST: FAIL · " + ex.Message);
+        }
+    }
+
     private static ListenerRewriteResult RewriteTarget(string input, ServerInfoEntry target, int newMaxAccept)
     {
         var changed = 0;
@@ -462,7 +520,10 @@ public sealed class ZoneClientListenerTestConfiguration
                 return match.Value;
 
             changed++;
-            return match.Groups["prefix"].Value + newMaxAccept + match.Groups["suffix"].Value;
+            return match.Groups["prefix"].Value
+                   + newMaxAccept
+                   + match.Groups["suffix"].Value
+                   + match.Groups["cr"].Value;
         });
 
         return changed == 1
@@ -815,6 +876,8 @@ public sealed class ZoneClientListenerAppliedVerificationResult
             Detail = "LISTENER VERIFY BLOCKED · " + detail
         };
 }
+
+public readonly record struct ZoneClientListenerRewriteSelfTestResult(bool Success, string Detail);
 
 public sealed class ZoneClientListenerConfigurationResult
 {
