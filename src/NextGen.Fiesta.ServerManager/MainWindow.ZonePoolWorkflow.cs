@@ -77,7 +77,11 @@ public partial class MainWindow
         }
 
         ZonePoolWorkflowAttached.Add(this, new object());
-        root.RowDefinitions.Insert(3, new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Insert(3, new RowDefinition
+        {
+            Height = new GridLength(1.15, GridUnitType.Star),
+            MinHeight = 170
+        });
         foreach (UIElement child in root.Children)
         {
             var row = Grid.GetRow(child);
@@ -85,8 +89,17 @@ public partial class MainWindow
         }
 
         var card = BuildZonePoolWorkflowCard();
-        Grid.SetRow(card, 3);
-        root.Children.Add(card);
+        var workflowScroll = new ScrollViewer
+        {
+            Content = card,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            PanningMode = PanningMode.Both,
+            CanContentScroll = false,
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+        Grid.SetRow(workflowScroll, 3);
+        root.Children.Add(workflowScroll);
         RefreshZonePoolTargets();
     }
 
