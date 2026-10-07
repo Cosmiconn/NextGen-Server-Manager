@@ -291,9 +291,16 @@ public sealed class FiestaHeadlessLoadClient
             WriteFixedAscii(createAck.AsSpan(5, 20), "NGL000001");
             ValidateCharacterCreateAck(createAck, "NGL000001");
 
+            if (IsPostReadyRemoteCloseFatal("World")
+                || !IsPostReadyRemoteCloseFatal("Zone"))
+            {
+                throw new InvalidDataException(
+                    "Post-ClientReady Remote-Close-Policy muss World tolerieren und Zone blockieren.");
+            }
+
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · World bleibt offen · Zone CH6/1→SH6/2→CH6/3 · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone CH6/1→SH6/2→CH6/3 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
@@ -529,6 +536,9 @@ public sealed class FiestaHeadlessLoadClient
         }
     }
 
+    private static bool IsPostReadyRemoteCloseFatal(string role)
+        => role.Equals("Zone", StringComparison.OrdinalIgnoreCase);
+
     private static async Task HoldSessionsAsync(
         FiestaWireConnection worldConnection,
         FiestaWireConnection zoneConnection,
@@ -544,10 +554,12 @@ public sealed class FiestaHeadlessLoadClient
         var worldPump = PumpSessionAsync(
             worldConnection,
             "World",
+            allowRemoteClose: true,
             holdCts.Token);
         var zonePump = PumpSessionAsync(
             zoneConnection,
             "Zone",
+            allowRemoteClose: false,
             holdCts.Token);
 
         try
@@ -563,6 +575,7 @@ public sealed class FiestaHeadlessLoadClient
     private static async Task PumpSessionAsync(
         FiestaWireConnection connection,
         string role,
+        bool allowRemoteClose,
         CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -589,13 +602,25 @@ public sealed class FiestaHeadlessLoadClient
                         $"{role} meldete SH4/2 ConnectError während des Haltens.");
                 }
 
-                // The real World connection continues receiving social/guild/system packets
-                // after SH4/3 while Zone is active. They do not require gameplay emulation here;
-                // draining them keeps the TCP receive window healthy. Heartbeats are answered above.
+                // Drain non-heartbeat traffic so the TCP receive window remains healthy.
             }
             catch (TimeoutException)
             {
                 // An idle 10-second interval is valid; keep the session alive.
+            }
+            catch (EndOfStreamException) when (allowRemoteClose)
+            {
+                // After successful Zone ClientReady the authoritative proof is the live Zone
+                // socket plus the hash-bound ShinePlayer l_ListNum. Some server paths can retire
+                // the World client socket after handoff; that alone must not invalidate a player
+                // that remains present in ShinePlayer throughout the stability window.
+                return;
+            }
+            catch (EndOfStreamException ex)
+            {
+                throw new EndOfStreamException(
+                    $"{role}: Fiesta-Verbindung wurde vom Server geschlossen.",
+                    ex);
             }
         }
     }
