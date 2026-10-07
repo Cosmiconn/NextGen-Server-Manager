@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace NextGen.Fiesta.ServerManager.Services;
@@ -79,11 +80,47 @@ public sealed class FiestaClientCaptureProfileImporter
                 "Bitte einen sauberen Mitschnitt mit genau einem Clientlogin verwenden.");
         }
 
-        var selected = distinct[0] with
+        var selected = distinct[0];
+
+        var worldCandidates = DiscoverCandidateStreams(tshark, options.CapturePath, selected.WorldPort)
+            .Select(streamId =>
+            {
+                var follow = RunProcess(
+                    tshark,
+                    "-r", options.CapturePath,
+                    "-q",
+                    "-z", $"follow,tcp,raw,{streamId}");
+                return TryExtractWorldClientKeyFromFollowText(
+                    follow,
+                    streamId,
+                    selected.WorldPort,
+                    selected.WorldTransferKey);
+            })
+            .Where(x => x is not null)
+            .Cast<FiestaWorldClientKeyCapture>()
+            .ToList();
+
+        if (worldCandidates.Count != 1)
         {
-            SourceCaptureSha256 = ComputeSha256(options.CapturePath)
+            return FiestaClientCaptureProfileResult.CreateBlocked(
+                worldCandidates.Count == 0
+                    ? $"Login-Profil wurde gefunden, aber kein passender CH3/15 WorldClientKey auf Port {selected.WorldPort}. " +
+                      "Der Mitschnitt muss vom Login bis mindestens zur Charakterliste reichen."
+                    : $"Es wurden {worldCandidates.Count} passende CH3/15 WorldClientKey-Streams gefunden. " +
+                      "Bitte einen sauberen Mitschnitt mit genau einem Clientlogin verwenden.");
+        }
+
+        var worldClientKey = worldCandidates[0];
+        selected = selected with
+        {
+            SourceCaptureSha256 = ComputeSha256(options.CapturePath),
+            WorldClientKeyBodyBase64 = Convert.ToBase64String(worldClientKey.Body),
+            WorldTcpStreamId = worldClientKey.TcpStreamId,
+            WorldXorPosition = worldClientKey.XorPosition
         };
         selected.Validate();
+        if (!selected.HasCapturedWorldClientKey)
+            return FiestaClientCaptureProfileResult.CreateBlocked("CH3/15 WorldClientKey wurde nicht vollständig capture-basiert gesichert.");
 
         var output = Path.GetFullPath(options.OutputProfilePath);
         var directory = Path.GetDirectoryName(output);
@@ -115,6 +152,8 @@ public sealed class FiestaClientCaptureProfileImporter
             const ushort version = 77;
             const byte worldId = 3;
             const string fileHash = "0123456789abcdef0123456789abcdef";
+            const string transferKey = "00112233445566778899aabbccddeeff";
+            const ushort worldXorPosition = 211;
 
             var handshakePayload = BuildPayload(2, 7, new byte[]
             {
@@ -136,7 +175,7 @@ public sealed class FiestaClientCaptureProfileImporter
             FiestaHeadlessLoadClient.WriteFixedAscii(worldRedirectBody.AsSpan(1, 16), worldHost);
             worldRedirectBody[17] = (byte)(worldPort & 0xff);
             worldRedirectBody[18] = (byte)(worldPort >> 8);
-            FiestaHeadlessLoadClient.WriteFixedAscii(worldRedirectBody.AsSpan(19, 32), "0123456789abcdef0123456789abcdef");
+            FiestaHeadlessLoadClient.WriteFixedAscii(worldRedirectBody.AsSpan(19, 32), transferKey);
             var worldRedirectPayload = BuildPayload(3, 12, worldRedirectBody);
 
             var fileHashBytes = Encoding.ASCII.GetBytes(fileHash + "\0");
@@ -181,15 +220,66 @@ public sealed class FiestaClientCaptureProfileImporter
                 || profile.WorldHost != worldHost
                 || profile.WorldPort != worldPort
                 || profile.FileHash != fileHash
-                || profile.XorPosition != xorPosition)
+                || profile.XorPosition != xorPosition
+                || profile.WorldTransferKey != transferKey)
             {
                 throw new InvalidDataException(
-                    "Capture-Profil veränderte Login-/World-Endpoint, Version, FileHash, World-ID oder XOR-Position.");
+                    "Capture-Profil veränderte Login-/World-Endpoint, Version, FileHash, World-ID, Transfer-Key oder XOR-Position.");
+            }
+
+            var worldHandshakePayload = BuildPayload(2, 7, new byte[]
+            {
+                (byte)(worldXorPosition & 0xff),
+                (byte)(worldXorPosition >> 8)
+            });
+            var capturedWorldBody = new byte[50];
+            for (var i = 0; i < 18; i++)
+                capturedWorldBody[i] = unchecked((byte)(0xA0 + i));
+            FiestaHeadlessLoadClient.WriteFixedAscii(capturedWorldBody.AsSpan(18, 32), transferKey);
+
+            var worldClientPayload = BuildPayload(3, 15, capturedWorldBody);
+            var encryptedWorld = worldClientPayload.ToArray();
+            var worldCipher = new FiestaXorCipher(worldXorPosition);
+            worldCipher.TransformInPlace(encryptedWorld);
+
+            var worldFollow =
+                "===================================================================\n" +
+                "Follow: tcp,raw\n" +
+                "Filter: tcp.stream eq 10\n" +
+                "Node 0: 127.0.0.1:55002\n" +
+                $"Node 1: 127.0.0.1:{worldPort}\n" +
+                Convert.ToHexString(FiestaWireConnection.FramePayload(encryptedWorld)).ToLowerInvariant() + "\n" +
+                "\t" + Convert.ToHexString(FiestaWireConnection.FramePayload(worldHandshakePayload)).ToLowerInvariant() + "\n" +
+                "===================================================================\n";
+
+            var capturedWorld = TryExtractWorldClientKeyFromFollowText(
+                                    worldFollow,
+                                    10,
+                                    worldPort,
+                                    transferKey)
+                                ?? throw new InvalidDataException("Synthetischer CH3/15 WorldClientKey wurde nicht extrahiert.");
+
+            var enriched = profile with
+            {
+                WorldClientKeyBodyBase64 = Convert.ToBase64String(capturedWorld.Body),
+                WorldTcpStreamId = capturedWorld.TcpStreamId,
+                WorldXorPosition = capturedWorld.XorPosition
+            };
+            enriched.Validate();
+            if (!enriched.HasCapturedWorldClientKey)
+                throw new InvalidDataException("Capture-Profil markiert den vorhandenen CH3/15-Body nicht als vollständig.");
+
+            const string replacementKey = "ffeeddccbbaa99887766554433221100";
+            var materialized = enriched.MaterializeWorldClientKeyBody(replacementKey);
+            if (!materialized.AsSpan(0, 18).SequenceEqual(capturedWorldBody.AsSpan(0, 18))
+                || FiestaHeadlessLoadClient.ReadFixedAscii(materialized.AsSpan(18, 32)) != replacementKey)
+            {
+                throw new InvalidDataException("WorldClientKey-Materialisierung veränderte Capture-Prefix oder ersetzte Transfer-Key nicht korrekt.");
             }
 
             return new FiestaClientCaptureProfileSelfTestResult(
                 true,
-                "CLIENT CAPTURE PROFILE SELFTEST: PASS · CH3/101, CH3/4, CH3/11 und kontinuierliches XOR bestätigt.");
+                "CLIENT CAPTURE PROFILE SELFTEST: PASS · Login-Profil + echter CH3/15-Body capture-basiert, XOR kontinuierlich.");
         }
         catch (Exception ex)
         {
@@ -226,6 +316,7 @@ public sealed class FiestaClientCaptureProfileImporter
         FiestaPacket? handshake = null;
         string? worldHost = null;
         int? worldPort = null;
+        string? worldTransferKey = null;
         foreach (var frame in serverFrames)
         {
             var packet = FiestaPacket.FromPayload(frame);
@@ -235,14 +326,18 @@ public sealed class FiestaClientCaptureProfileImporter
                 continue;
             }
 
-            if (packet.Header == 3 && packet.Type == 12 && packet.Body.Length >= 19)
+            if (packet.Header == 3 && packet.Type == 12 && packet.Body.Length >= 51)
             {
                 worldHost = FiestaHeadlessLoadClient.ReadFixedAscii(packet.Body.AsSpan(1, 16));
                 worldPort = packet.Body[17] | (packet.Body[18] << 8);
+                worldTransferKey = FiestaHeadlessLoadClient.ReadFixedAscii(packet.Body.AsSpan(19, 32));
             }
         }
 
-        if (!handshake.HasValue || string.IsNullOrWhiteSpace(worldHost) || !worldPort.HasValue)
+        if (!handshake.HasValue
+            || string.IsNullOrWhiteSpace(worldHost)
+            || !worldPort.HasValue
+            || string.IsNullOrWhiteSpace(worldTransferKey))
             return null;
 
         var xorPosition = handshake.Value.Body[0] | (handshake.Value.Body[1] << 8);
@@ -301,10 +396,79 @@ public sealed class FiestaClientCaptureProfileImporter
             WorldHost = worldHost,
             WorldPort = worldPort.Value,
             TcpStreamId = streamId,
-            XorPosition = xorPosition
+            XorPosition = xorPosition,
+            WorldTransferKey = worldTransferKey
         };
         profile.Validate();
         return profile;
+    }
+
+    internal static FiestaWorldClientKeyCapture? TryExtractWorldClientKeyFromFollowText(
+        string followText,
+        int streamId,
+        int worldPort,
+        string expectedTransferKey)
+    {
+        if (string.IsNullOrWhiteSpace(followText) || string.IsNullOrWhiteSpace(expectedTransferKey))
+            return null;
+
+        var parsed = ParseFollow(followText);
+        var serverNode = parsed.Endpoints
+            .Where(x => x.Value.Port == worldPort)
+            .Select(x => (int?)x.Key)
+            .FirstOrDefault();
+        if (!serverNode.HasValue)
+            return null;
+
+        var clientNode = serverNode.Value == 0 ? 1 : 0;
+        if (!parsed.NodeData.TryGetValue(serverNode.Value, out var serverData)
+            || !parsed.NodeData.TryGetValue(clientNode, out var clientData))
+        {
+            return null;
+        }
+
+        FiestaPacket? handshake = null;
+        foreach (var frame in ParseFrames(serverData))
+        {
+            var packet = FiestaPacket.FromPayload(frame);
+            if (packet.Header == 2 && packet.Type == 7 && packet.Body.Length >= 2)
+            {
+                handshake = packet;
+                break;
+            }
+        }
+
+        if (!handshake.HasValue)
+            return null;
+
+        var xorPosition = handshake.Value.Body[0] | (handshake.Value.Body[1] << 8);
+        if (xorPosition is < 0 or >= FiestaXorCipher.TableLength)
+            return null;
+
+        var cipher = new FiestaXorCipher(xorPosition);
+        foreach (var encryptedPayload in ParseFrames(clientData))
+        {
+            var decrypted = encryptedPayload.ToArray();
+            cipher.TransformInPlace(decrypted);
+
+            FiestaPacket packet;
+            try { packet = FiestaPacket.FromPayload(decrypted); }
+            catch { continue; }
+
+            if (packet.Header != 3 || packet.Type != 15 || packet.Body.Length < 50)
+                continue;
+
+            var transferKey = FiestaHeadlessLoadClient.ReadFixedAscii(packet.Body.AsSpan(18, 32));
+            if (!string.Equals(transferKey, expectedTransferKey, StringComparison.Ordinal))
+                continue;
+
+            return new FiestaWorldClientKeyCapture(
+                streamId,
+                xorPosition,
+                packet.Body.ToArray());
+        }
+
+        return null;
     }
 
     private static FollowStream ParseFollow(string text)
@@ -542,7 +706,36 @@ public sealed record FiestaCapturedClientProfile
     public int WorldPort { get; init; }
     public int TcpStreamId { get; init; } = -1;
     public int XorPosition { get; init; }
+    public string WorldClientKeyBodyBase64 { get; init; } = string.Empty;
+    public int WorldTcpStreamId { get; init; } = -1;
+    public int WorldXorPosition { get; init; } = -1;
     public string SourceCaptureSha256 { get; init; } = string.Empty;
+
+    [JsonIgnore]
+    internal string WorldTransferKey { get; init; } = string.Empty;
+
+    [JsonIgnore]
+    public bool HasCapturedWorldClientKey
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(WorldClientKeyBodyBase64)
+                || WorldTcpStreamId < 0
+                || WorldXorPosition is < 0 or >= FiestaXorCipher.TableLength)
+            {
+                return false;
+            }
+
+            try
+            {
+                return Convert.FromBase64String(WorldClientKeyBodyBase64).Length >= 50;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
 
     public static FiestaCapturedClientProfile Load(string path)
     {
@@ -569,6 +762,33 @@ public sealed record FiestaCapturedClientProfile
             throw new InvalidDataException("TcpStreamId fehlt im Capture-Profil.");
         if (XorPosition is < 0 or >= FiestaXorCipher.TableLength)
             throw new InvalidDataException("XOR-Position liegt außerhalb der verifizierten 499-Byte-Tabelle.");
+
+        if (!string.IsNullOrWhiteSpace(WorldClientKeyBodyBase64))
+        {
+            byte[] body;
+            try { body = Convert.FromBase64String(WorldClientKeyBodyBase64); }
+            catch (FormatException ex) { throw new InvalidDataException("WorldClientKeyBodyBase64 ist ungültig.", ex); }
+            if (body.Length < 50)
+                throw new InvalidDataException($"CH3/15 WorldClientKey-Body ist zu kurz ({body.Length} Byte; mindestens 50 erwartet).");
+            if (WorldTcpStreamId < 0)
+                throw new InvalidDataException("WorldTcpStreamId fehlt für den capture-basierten CH3/15-Body.");
+            if (WorldXorPosition is < 0 or >= FiestaXorCipher.TableLength)
+                throw new InvalidDataException("WorldXorPosition liegt außerhalb der verifizierten 499-Byte-Tabelle.");
+        }
+    }
+
+    public byte[] MaterializeWorldClientKeyBody(string transferKey)
+    {
+        Validate();
+        if (!HasCapturedWorldClientKey)
+            throw new InvalidDataException(
+                "Capture-Profil enthält keinen vollständigen CH3/15 WorldClientKey-Body. Capture erneut vom Login bis zur Charakterliste importieren.");
+        if (string.IsNullOrWhiteSpace(transferKey) || Encoding.ASCII.GetByteCount(transferKey) > 32)
+            throw new ArgumentException("World-Transfer-Key fehlt oder ist länger als 32 ASCII-Byte.", nameof(transferKey));
+
+        var body = Convert.FromBase64String(WorldClientKeyBodyBase64);
+        FiestaHeadlessLoadClient.WriteFixedAscii(body.AsSpan(18, 32), transferKey);
+        return body;
     }
 }
 

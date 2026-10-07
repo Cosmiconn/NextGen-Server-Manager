@@ -76,7 +76,7 @@ public sealed class FiestaHeadlessLoadClient
                 cancellationToken);
             SetStage(FiestaLoadClientStage.WorldConnected);
 
-            await worldConnection.SendPacketAsync(3, 15, BuildWorldTransferBody(world.TransferKey), cancellationToken);
+            await worldConnection.SendPacketAsync(3, 15, BuildWorldTransferBody(options, world.TransferKey), cancellationToken);
             var characterList = await WaitForAsync(worldConnection, 3, 20, options.StepTimeout, cancellationToken);
             if (characterList.Body.Length < 3)
                 throw new InvalidDataException("World CharacterList ist zu kurz.");
@@ -295,10 +295,28 @@ public sealed class FiestaHeadlessLoadClient
         return body;
     }
 
-    private static byte[] BuildWorldTransferBody(string transferKey)
+    private static byte[] BuildWorldTransferBody(FiestaHeadlessProbeOptions options, string transferKey)
     {
+        if (!string.IsNullOrWhiteSpace(options.ClientCaptureProfilePath))
+        {
+            var profile = FiestaCapturedClientProfile.Load(options.ClientCaptureProfilePath);
+            if (!profile.HasCapturedWorldClientKey)
+            {
+                throw new InvalidDataException(
+                    "Client-Capture-Profil enthält keinen vollständigen CH3/15 WorldClientKey-Body.");
+            }
+
+            return profile.MaterializeWorldClientKeyBody(transferKey);
+        }
+
+        if (!options.AllowEmulatorWorldClientKeyFallback)
+        {
+            throw new InvalidOperationException(
+                "Für den Original-NA2016-Server ist ein capture-basierter CH3/15 WorldClientKey-Body erforderlich. " +
+                "Der alte 18-Nullbyte-Emulatorfallback wird nicht als Originalserver-Proof verwendet.");
+        }
+
         var body = new byte[50];
-        // The real/emulated WorldClientKey starts with 18 bytes of client metadata/padding.
         WriteFixedAscii(body.AsSpan(18, 32), transferKey);
         return body;
     }
@@ -415,8 +433,10 @@ public sealed class FiestaHeadlessProbeOptions
     public ushort ClientVersion { get; init; } = 2;
     public string ClientTag { get; init; } = "Original";
     public string? FileHash { get; init; }
+    public string? ClientCaptureProfilePath { get; init; }
     public string? ZoneTransferTemplatePath { get; init; }
     public string? CharacterCreateTemplatePath { get; init; }
+    public bool AllowEmulatorWorldClientKeyFallback { get; init; }
     public bool AllowEmulatorSizedZoneTransfer { get; init; }
     public TimeSpan StepTimeout { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan ZoneLoginTimeout { get; init; } = TimeSpan.FromSeconds(30);
@@ -430,6 +450,8 @@ public sealed class FiestaHeadlessProbeOptions
         if (ClientTag.Length > 8) throw new ArgumentException("ClientTag darf maximal 8 ASCII-Zeichen lang sein.");
         if (StepTimeout <= TimeSpan.Zero || ZoneLoginTimeout <= TimeSpan.Zero) throw new ArgumentException("Timeouts müssen positiv sein.");
         if (HoldDuration < TimeSpan.Zero) throw new ArgumentException("HoldDuration darf nicht negativ sein.");
+        if (!string.IsNullOrWhiteSpace(ClientCaptureProfilePath) && !File.Exists(ClientCaptureProfilePath))
+            throw new FileNotFoundException("Client-Capture-Profil wurde nicht gefunden.", ClientCaptureProfilePath);
         if (!string.IsNullOrWhiteSpace(ZoneTransferTemplatePath) && !File.Exists(ZoneTransferTemplatePath))
             throw new FileNotFoundException("Zone-Transfer-Template wurde nicht gefunden.", ZoneTransferTemplatePath);
         if (!string.IsNullOrWhiteSpace(CharacterCreateTemplatePath) && !File.Exists(CharacterCreateTemplatePath))

@@ -25,6 +25,7 @@ public partial class MainWindow
     private TextBox? _zoneLoadCapturePathBox;
     private TextBox? _zoneLoadCaptureCharacterBox;
     private TextBox? _zoneLoadTemplatePathBox;
+    private TextBox? _zoneLoadClientProfilePathBox;
     private TextBox? _zoneLoadCharacterCreateTemplatePathBox;
     private TextBox? _zoneLoadCredentialPathBox;
     private TextBox? _zoneLoadIdentityCountBox;
@@ -285,6 +286,32 @@ public partial class MainWindow
         }));
         stack.Children.Add(filesRow);
 
+        var profileRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+        profileRow.Children.Add(new TextBlock
+        {
+            Text = "Client-Profil",
+            Width = 112,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 10,
+            Foreground = (Brush)FindResource("MutedStrong")
+        });
+        _zoneLoadClientProfilePathBox = CreateZoneLoadTextBox(430, "Capture-basiertes Login/World-Profil inklusive CH3/15");
+        profileRow.Children.Add(_zoneLoadClientProfilePathBox);
+        profileRow.Children.Add(CreateZonePoolButton("Profil…", false, async () =>
+        {
+            BrowseZoneLoadClientProfile();
+            await Task.CompletedTask;
+        }));
+        profileRow.Children.Add(new TextBlock
+        {
+            Text = "Pflicht für Originalserver-Test: erhält die echten 18 CH3/15-Prefixbytes.",
+            Foreground = (Brush)FindResource("Muted"),
+            FontSize = 9,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0)
+        });
+        stack.Children.Add(profileRow);
+
         var identityRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
         identityRow.Children.Add(new TextBlock
         {
@@ -418,6 +445,19 @@ public partial class MainWindow
             _zoneLoadTemplatePathBox.Text = dialog.FileName;
     }
 
+    private void BrowseZoneLoadClientProfile()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "NA2016 Client-Capture-Profil auswählen",
+            Filter = "JSON (*.json)|*.json|Alle Dateien (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == true && _zoneLoadClientProfilePathBox is not null)
+            _zoneLoadClientProfilePathBox.Text = dialog.FileName;
+    }
+
     private void BrowseZoneLoadCharacterCreateTemplate()
     {
         var dialog = new OpenFileDialog
@@ -514,6 +554,7 @@ public partial class MainWindow
 
         var profile = imported.Client.Profile;
         if (_zoneLoadTemplatePathBox is not null) _zoneLoadTemplatePathBox.Text = imported.Zone.TemplatePath;
+        if (_zoneLoadClientProfilePathBox is not null) _zoneLoadClientProfilePathBox.Text = imported.Client.ProfilePath;
         if (imported.Character?.Success == true && _zoneLoadCharacterCreateTemplatePathBox is not null)
             _zoneLoadCharacterCreateTemplatePathBox.Text = imported.Character.TemplatePath;
         if (_zoneLoadLoginHostBox is not null) _zoneLoadLoginHostBox.Text = profile.LoginHost;
@@ -578,10 +619,16 @@ public partial class MainWindow
         {
             var target = RequireZonePoolTarget();
             var template = _zoneLoadTemplatePathBox?.Text.Trim();
+            var clientProfile = _zoneLoadClientProfilePathBox?.Text.Trim();
             var characterCreateTemplate = _zoneLoadCharacterCreateTemplatePathBox?.Text.Trim();
             var credentials = _zoneLoadCredentialPathBox?.Text.Trim();
             if (string.IsNullOrWhiteSpace(template) || !File.Exists(template))
                 throw new InvalidOperationException("Gültiges CH6/1-Template fehlt. Erst Capture importieren oder Template auswählen.");
+            if (string.IsNullOrWhiteSpace(clientProfile) || !File.Exists(clientProfile))
+                throw new InvalidOperationException("Capture-basiertes Client-Profil mit CH3/15 fehlt. Capture erneut importieren oder Profil auswählen.");
+            var validatedClientProfile = FiestaCapturedClientProfile.Load(clientProfile);
+            if (!validatedClientProfile.HasCapturedWorldClientKey)
+                throw new InvalidOperationException("Client-Profil enthält keinen vollständigen capture-basierten CH3/15 WorldClientKey-Body.");
             if (string.IsNullOrWhiteSpace(credentials) || !File.Exists(credentials))
                 throw new InvalidOperationException("Credential-Manifest fehlt.");
 
@@ -608,6 +655,7 @@ public partial class MainWindow
                     ClientYear = checked((ushort)clientYear),
                     ClientVersion = checked((ushort)clientVersion),
                     FileHash = fileHash,
+                    ClientCaptureProfilePath = clientProfile,
                     ZoneTransferTemplatePath = template,
                     CharacterCreateTemplatePath =
                         !string.IsNullOrWhiteSpace(characterCreateTemplate) && File.Exists(characterCreateTemplate)

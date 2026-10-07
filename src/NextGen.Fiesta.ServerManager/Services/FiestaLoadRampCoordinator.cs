@@ -371,8 +371,10 @@ public sealed class FiestaLoadRampCoordinator
             ClientVersion = source.ClientVersion,
             ClientTag = source.ClientTag,
             FileHash = source.FileHash,
+            ClientCaptureProfilePath = source.ClientCaptureProfilePath,
             ZoneTransferTemplatePath = source.ZoneTransferTemplatePath,
             CharacterCreateTemplatePath = source.CharacterCreateTemplatePath,
+            AllowEmulatorWorldClientKeyFallback = false,
             AllowEmulatorSizedZoneTransfer = false,
             StepTimeout = source.StepTimeout,
             ZoneLoginTimeout = source.ZoneLoginTimeout,
@@ -404,6 +406,11 @@ public sealed class FiestaLoadRampOptions
             throw new FileNotFoundException("CredentialManifestPath wurde nicht gefunden.", CredentialManifestPath);
         ClientOptions.Validate();
 
+        if (string.IsNullOrWhiteSpace(ClientOptions.ClientCaptureProfilePath))
+            throw new ArgumentException("Für Originalserver-Lasttests ist ClientCaptureProfilePath mit capture-basiertem CH3/15 zwingend.");
+        var capturedProfile = FiestaCapturedClientProfile.Load(ClientOptions.ClientCaptureProfilePath);
+        if (!capturedProfile.HasCapturedWorldClientKey)
+            throw new ArgumentException("ClientCaptureProfilePath enthält keinen vollständigen capture-basierten CH3/15 WorldClientKey-Body.");
         if (string.IsNullOrWhiteSpace(ClientOptions.ZoneTransferTemplatePath))
             throw new ArgumentException("Für Originalserver-Lasttests ist ZoneTransferTemplatePath zwingend.");
         if (StageTargets.Count == 0 || StageTargets.Any(x => x <= 0))
