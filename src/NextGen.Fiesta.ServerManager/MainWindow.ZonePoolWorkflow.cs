@@ -647,6 +647,14 @@ public partial class MainWindow
             if (string.IsNullOrWhiteSpace(credentials) || !File.Exists(credentials))
                 throw new InvalidOperationException("Credential-Manifest fehlt.");
 
+            var credentialManifest = FiestaLoadCredentialManifest.Load(credentials);
+            if (!credentialManifest.IsLoginAutoRegistrationCompatible(out var credentialCompatibility))
+                throw new InvalidOperationException(credentialCompatibility);
+
+            SetZoneLoadStatus(
+                credentialCompatibility +
+                " · Dieses Manifest wird für den folgenden Player-Loadtest verwendet.");
+
             var loginHost = string.IsNullOrWhiteSpace(_zoneLoadLoginHostBox?.Text)
                 ? "127.0.0.1"
                 : _zoneLoadLoginHostBox.Text.Trim();

@@ -22,6 +22,12 @@ public sealed class FiestaLoadRampCoordinator
         options.Validate();
 
         var credentials = FiestaLoadCredentialManifest.Load(options.CredentialManifestPath);
+        if (!credentials.IsLoginAutoRegistrationCompatible(out var credentialCompatibility))
+        {
+            return FiestaLoadRampResult.CreateBlocked(
+                "Credential-Preflight: " + credentialCompatibility);
+        }
+
         var targets = options.StageTargets
             .Distinct()
             .OrderBy(x => x)
@@ -490,6 +496,40 @@ public sealed class FiestaLoadRampOptions
                 FinalStabilityDuration = TimeSpan.FromMinutes(5),
                 StabilityPollInterval = TimeSpan.FromSeconds(5)
             };
+            var autoManifest = new FiestaLoadCredentialManifest
+            {
+                Clients = new List<FiestaLoadClientCredential>
+                {
+                    new()
+                    {
+                        Username = "r_ngt000001",
+                        PasswordMd5 = "21232f297a57a5a743894a0e4a801fc3",
+                        CharacterName = "NGT000001",
+                        Slot = 0,
+                        CreateCharacterIfMissing = true
+                    }
+                }
+            };
+            if (!autoManifest.IsLoginAutoRegistrationCompatible(out _))
+                throw new InvalidDataException("r_-Credential-Manifest wurde fälschlich als inkompatibel abgelehnt.");
+
+            var staleManifest = new FiestaLoadCredentialManifest
+            {
+                Clients = new List<FiestaLoadClientCredential>
+                {
+                    new()
+                    {
+                        Username = "ngt000001",
+                        PasswordMd5 = "21232f297a57a5a743894a0e4a801fc3",
+                        CharacterName = "NGT000001",
+                        Slot = 0,
+                        CreateCharacterIfMissing = true
+                    }
+                }
+            };
+            if (staleManifest.IsLoginAutoRegistrationCompatible(out _))
+                throw new InvalidDataException("Manifest ohne r_-Prefix wurde fälschlich für Auto-Registration akzeptiert.");
+
             var singleRequired = single.CalculateRequiredSessionHoldDuration();
             if (single.SessionHoldDuration <= singleRequired
                 || singleRequired >= TimeSpan.FromMinutes(6))
@@ -547,6 +587,32 @@ public sealed class FiestaLoadCredentialManifest
                        ?? throw new InvalidDataException("Credential-Manifest ist leer oder ungültig.");
         manifest.Validate();
         return manifest;
+    }
+
+    public bool IsLoginAutoRegistrationCompatible(out string detail)
+    {
+        Validate();
+
+        var invalid = Clients
+            .Where(x => !x.Username.StartsWith("r_", StringComparison.OrdinalIgnoreCase))
+            .Take(3)
+            .Select(x => x.Username)
+            .ToArray();
+
+        if (invalid.Length == 0)
+        {
+            detail =
+                $"AUTO-REGISTER CREDENTIALS OK · {Clients.Count:N0} Accounts · erster User {Clients[0].Username}.";
+            return true;
+        }
+
+        detail =
+            "Ausgewähltes Credential-Manifest ist NICHT für Login-Auto-Registration geeignet. " +
+            "Erwartet werden ausschließlich Usernamen mit Präfix r_. " +
+            $"Gefunden: {string.Join(", ", invalid)}. " +
+            "Bitte das Manifest des erfolgreichen r_-Laufs auswählen. Falls es nicht mehr vorhanden ist, " +
+            "mit einem NEUEN Basis-Prefix frische Auto-Register-Credentials erzeugen, damit keine vorhandenen r_-Accounts ein anderes Passwort besitzen.";
+        return false;
     }
 
     public void Validate()
