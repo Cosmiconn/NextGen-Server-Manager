@@ -584,6 +584,7 @@ public sealed class FiestaHeadlessLoadClient
             }
 
             if (!IsTransientProvisioningLoginFailure(new EndOfStreamException())
+                || !IsTransientProvisioningLoginFailure(new OperationCanceledException())
                 || !IsTransientProvisioningLoginFailure(new InvalidDataException("Fiesta-Frame meldet Länge 0."))
                 || IsTransientProvisioningLoginFailure(new InvalidOperationException("Login/World meldete SH3/9 Error."))
                 || IsTransientProvisioningLoginFailure(new InvalidDataException("Falsches Handshake-Opcode")))
@@ -739,6 +740,7 @@ public sealed class FiestaHeadlessLoadClient
 
     private static bool IsTransientProvisioningLoginFailure(Exception ex)
         => IsTransientInitialWorldTransportFailure(ex)
+           || ex is OperationCanceledException
            || (ex is InvalidDataException data
                && data.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase));
 
