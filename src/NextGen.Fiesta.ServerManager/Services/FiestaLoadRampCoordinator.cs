@@ -202,20 +202,63 @@ public sealed class FiestaLoadRampCoordinator
                         $"Clientfehler unmittelbar vor Serververifikation der Stufe {target:N0}.");
                 }
 
-                var observation = _runtimeObserver.Observe(options.TargetZoneExePath, minimumUptimeSeconds: 0);
                 var expectedPlayers = baselinePlayers + target;
-                if (!observation.Passed || observation.Pools is null)
+                ZonePoolRuntimeObservation? observation = null;
+                var exactSamples = 0;
+                var verificationSamples = 0;
+
+                // Do not fail a stage from one instantaneous PDB/runtime sample. Require two
+                // consecutive exact ShinePlayer samples, while still failing hard if a client
+                // actually drops or the exact count never converges within five seconds.
+                for (var sample = 0; sample < 5; sample++)
+                {
+                    if (failed.Count > 0 || ready.Count != target)
+                        break;
+
+                    observation = _runtimeObserver.Observe(options.TargetZoneExePath, minimumUptimeSeconds: 0);
+                    if (!observation.Passed || observation.Pools is null)
+                    {
+                        return BuildFailure(
+                            baselinePlayers,
+                            stageResults,
+                            ready.Count,
+                            failed,
+                            $"Runtime-Observer blockierte Stufe {target:N0}: {observation.Detail}");
+                    }
+
+                    verificationSamples++;
+                    if (observation.Pools.PlayerCount == expectedPlayers)
+                    {
+                        exactSamples++;
+                        if (exactSamples >= 2)
+                            break;
+                    }
+                    else
+                    {
+                        exactSamples = 0;
+                    }
+
+                    if (sample < 4)
+                        await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                }
+
+                if (observation is null || observation.Pools is null)
                 {
                     return BuildFailure(
                         baselinePlayers,
                         stageResults,
                         ready.Count,
                         failed,
-                        $"Runtime-Observer blockierte Stufe {target:N0}: {observation.Detail}");
+                        $"Keine gültige Serverbeobachtung für Stufe {target:N0}.");
                 }
 
                 var actualPlayers = observation.Pools.PlayerCount;
-                var stagePassed = actualPlayers == expectedPlayers;
+                var stagePassed =
+                    failed.Count == 0
+                    && ready.Count == target
+                    && actualPlayers == expectedPlayers
+                    && exactSamples >= 2;
+
                 stageResults.Add(new FiestaLoadRampStageResult
                 {
                     TargetClients = target,
@@ -226,8 +269,8 @@ public sealed class FiestaLoadRampCoordinator
                     Passed = stagePassed,
                     TimestampUtc = DateTimeOffset.UtcNow,
                     Detail = stagePassed
-                        ? $"PASS: {target:N0} Simulatoren ready, ShinePlayer {actualPlayers:N0}/{observation.Pools.PlayerLimit:N0}."
-                        : $"FAIL: Simulatoren ready={ready.Count:N0}; ShinePlayer erwartet {expectedPlayers:N0}, gemessen {actualPlayers:N0}."
+                        ? $"PASS: {target:N0} Simulatoren ready, ShinePlayer {actualPlayers:N0}/{observation.Pools.PlayerLimit:N0} · {exactSamples} exakte Samples."
+                        : $"FAIL: Simulatoren ready={ready.Count:N0}; ShinePlayer erwartet {expectedPlayers:N0}, gemessen {actualPlayers:N0} nach {verificationSamples} Verifikations-Samples."
                 });
 
                 progress?.Invoke(new FiestaLoadRampProgress(
