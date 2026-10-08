@@ -202,6 +202,12 @@ public sealed class FiestaHeadlessLoadClient
                     retainedWorldConnection,
                     zoneConnection,
                     holdFor,
+                    heartbeatDetail => progress?.Invoke(new FiestaHeadlessClientProgress(
+                        credential.Username,
+                        credential.CharacterName,
+                        FiestaLoadClientStage.Holding,
+                        heartbeatDetail,
+                        DateTimeOffset.UtcNow)),
                     cancellationToken);
             }
 
@@ -776,6 +782,7 @@ public sealed class FiestaHeadlessLoadClient
         FiestaWireConnection worldConnection,
         FiestaWireConnection zoneConnection,
         TimeSpan duration,
+        Action<string>? zoneHeartbeatProgress,
         CancellationToken cancellationToken)
     {
         if (duration <= TimeSpan.Zero)
@@ -788,11 +795,13 @@ public sealed class FiestaHeadlessLoadClient
             worldConnection,
             "World",
             allowRemoteClose: true,
+            heartbeatProgress: null,
             holdCts.Token);
         var zonePump = PumpSessionAsync(
             zoneConnection,
             "Zone",
             allowRemoteClose: false,
+            zoneHeartbeatProgress,
             holdCts.Token);
 
         try
@@ -809,6 +818,7 @@ public sealed class FiestaHeadlessLoadClient
         FiestaWireConnection connection,
         string role,
         bool allowRemoteClose,
+        Action<string>? heartbeatProgress,
         CancellationToken cancellationToken)
     {
         var serverHeartbeatRequests = 0;
@@ -872,6 +882,8 @@ public sealed class FiestaHeadlessLoadClient
                 {
                     clientHeartbeatAcks++;
                     lastHeartbeatActivityUtc = DateTimeOffset.UtcNow;
+                    heartbeatProgress?.Invoke(
+                        $"ZONE_HEARTBEAT_ACK · CH2/4 gesendet={clientHeartbeatRequests:N0} · SH2/5 empfangen={clientHeartbeatAcks:N0}");
                     continue;
                 }
 
