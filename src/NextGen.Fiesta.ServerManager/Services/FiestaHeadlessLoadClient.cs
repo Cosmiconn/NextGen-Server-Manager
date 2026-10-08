@@ -260,6 +260,169 @@ public sealed class FiestaHeadlessLoadClient
         }
     }
 
+    public async Task<FiestaHeadlessProbeResult> ProvisionIdentityAsync(
+        FiestaHeadlessProbeOptions options,
+        FiestaLoadClientCredential credential,
+        CancellationToken cancellationToken = default,
+        Action<FiestaHeadlessClientProgress>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(credential);
+        options.Validate();
+        credential.Validate();
+
+        var stage = FiestaLoadClientStage.None;
+        void SetStage(FiestaLoadClientStage next, string detail = "")
+        {
+            stage = next;
+            progress?.Invoke(new FiestaHeadlessClientProgress(
+                credential.Username,
+                credential.CharacterName,
+                next,
+                detail,
+                DateTimeOffset.UtcNow));
+        }
+
+        SetStage(FiestaLoadClientStage.None, "Identity-Provision Start");
+        try
+        {
+            var passwordMd5 = credential.ResolvePasswordMd5();
+            var clientProfile = string.IsNullOrWhiteSpace(options.ClientCaptureProfilePath)
+                ? null
+                : FiestaCapturedClientProfile.Load(options.ClientCaptureProfilePath);
+
+            FiestaEndpointRedirect? zone = null;
+            FiestaEndpointRedirect? finalWorld = null;
+            ushort randomId = 0;
+            byte characterCount = 0;
+            var createdThisRun = false;
+
+            // Provisioning deliberately stops after an authoritative World character selection
+            // yielded SH4/3 ZoneRedirect. No Zone session is kept alive, so this phase cannot be
+            // mistaken for the later ShinePlayer capacity measurement.
+            for (var worldPass = 0; worldPass < 2 && zone is null; worldPass++)
+            {
+                FiestaWorldEntryResult? worldResult = null;
+
+                for (var attempt = 1; attempt <= InitialWorldTransferMaxAttempts; attempt++)
+                {
+                    var world = await LoginAndGetWorldRedirectAsync(
+                        options,
+                        credential,
+                        passwordMd5,
+                        clientProfile,
+                        cancellationToken,
+                        SetStage);
+                    finalWorld = world;
+
+                    try
+                    {
+                        worldResult = await PrepareWorldEntryAsync(
+                            world,
+                            options,
+                            credential,
+                            clientProfile,
+                            allowCharacterCreate: worldPass == 0,
+                            cancellationToken,
+                            SetStage);
+                        break;
+                    }
+                    catch (Exception ex)
+                        when (IsRetryableWorldHandoffFailure(ex)
+                              && ShouldRetryInitialWorldTransfer(credential.Username, attempt))
+                    {
+                        var delay = GetInitialWorldTransferRetryDelay(credential.Username, attempt);
+                        SetStage(
+                            FiestaLoadClientStage.WorldConnected,
+                            $"Provisioning World-Retry {attempt + 1}/{InitialWorldTransferMaxAttempts} in {delay.TotalMilliseconds:N0} ms · {ex.Message}");
+                        await Task.Delay(delay, cancellationToken);
+                    }
+                }
+
+                if (worldResult is null)
+                    throw new InvalidOperationException(
+                        "Identity-Provisioning lieferte nach den zulässigen World-Versuchen kein Ergebnis.");
+
+                randomId = worldResult.RandomId;
+                characterCount = worldResult.CharacterCount;
+
+                if (worldResult.CharacterCreated)
+                {
+                    createdThisRun = true;
+                    SetStage(
+                        FiestaLoadClientStage.CharacterCreated,
+                        $"'{credential.CharacterName}' wurde erstellt; warte kurz auf Persistierung vor dem autoritativen Relogin.");
+                    await Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken);
+                    continue;
+                }
+
+                zone = worldResult.Zone
+                       ?? throw new InvalidDataException(
+                           "Identity-Provisioning erhielt nach Charakterauswahl keinen SH4/3 ZoneRedirect.");
+
+                if (worldResult.WorldConnection is not null)
+                    await worldResult.WorldConnection.DisposeAsync();
+
+                SetStage(
+                    FiestaLoadClientStage.ZoneRedirectReceived,
+                    $"IDENTITY READY · SH3/20 enthält '{credential.CharacterName}' und SH4/3 ZoneRedirect wurde bestätigt.");
+            }
+
+            if (zone is null || finalWorld is null)
+                throw new InvalidOperationException(
+                    $"Identity-Provisioning für '{credential.Username}/{credential.CharacterName}' blieb ohne gültigen ZoneRedirect.");
+
+            return new FiestaHeadlessProbeResult
+            {
+                Success = true,
+                Stage = FiestaLoadClientStage.ZoneRedirectReceived,
+                WorldHost = finalWorld.Host,
+                WorldPort = finalWorld.Port,
+                ZoneHost = zone.Host,
+                ZonePort = zone.Port,
+                RandomId = randomId,
+                CharacterCount = characterCount,
+                Detail =
+                    $"IDENTITY PROVISION PASS · {credential.Username}/{credential.CharacterName} · " +
+                    $"{(createdThisRun ? "Account/Charakter neu bzw. frisch persistiert" : "bereits vorhanden")} · " +
+                    $"World-Auswahl + SH4/3 bestätigt."
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            progress?.Invoke(new FiestaHeadlessClientProgress(
+                credential.Username,
+                credential.CharacterName,
+                stage,
+                "Identity-Provisioning abgebrochen",
+                DateTimeOffset.UtcNow,
+                Failed: true));
+            return new FiestaHeadlessProbeResult
+            {
+                Success = false,
+                Cancelled = true,
+                Stage = stage,
+                Detail = $"Identity-Provisioning bei Stufe {stage} abgebrochen."
+            };
+        }
+        catch (Exception ex)
+        {
+            progress?.Invoke(new FiestaHeadlessClientProgress(
+                credential.Username,
+                credential.CharacterName,
+                stage,
+                ex.Message,
+                DateTimeOffset.UtcNow,
+                Failed: true));
+            return new FiestaHeadlessProbeResult
+            {
+                Success = false,
+                Stage = stage,
+                Detail = $"Identity-Provisioning bei Stufe {stage} fehlgeschlagen: {ex.Message}"
+            };
+        }
+    }
+
     public static FiestaProtocolSelfTestResult RunProtocolSelfTest()
     {
         try
@@ -382,10 +545,12 @@ public sealed class FiestaHeadlessLoadClient
 
             if (!IsRetryableWorldHandoffFailure(
                     new FiestaWorldCharacterLoginRejectedException(1, "test"))
+                || !IsRetryableWorldHandoffFailure(
+                    new FiestaWorldCharacterNotVisibleException("test"))
                 || IsRetryableWorldHandoffFailure(new InvalidOperationException("test")))
             {
                 throw new InvalidDataException(
-                    "World-Character-Login-Retryklassifizierung ist zu breit oder zu eng.");
+                    "World-Character-/Persistierungs-Retryklassifizierung ist zu breit oder zu eng.");
             }
 
             if (!IsTransientInitialZoneTransferFailure(new EndOfStreamException())
@@ -511,7 +676,8 @@ public sealed class FiestaHeadlessLoadClient
 
     private static bool IsRetryableWorldHandoffFailure(Exception ex)
         => ex is FiestaInitialWorldTransferRejectedException
-           or FiestaWorldCharacterLoginRejectedException;
+           or FiestaWorldCharacterLoginRejectedException
+           or FiestaWorldCharacterNotVisibleException;
 
     private static bool IsTransientInitialZoneTransferFailure(Exception ex)
     {
@@ -683,10 +849,16 @@ public sealed class FiestaHeadlessLoadClient
                     retainedConnection);
             }
 
-            if (!allowCharacterCreate || !credential.CreateCharacterIfMissing)
+            if (!allowCharacterCreate)
+            {
+                throw new FiestaWorldCharacterNotVisibleException(
+                    $"Charakter '{credential.CharacterName}' ist nach der Erstellung noch nicht in der autoritativen SH3/20-Liste sichtbar.");
+            }
+
+            if (!credential.CreateCharacterIfMissing)
             {
                 throw new InvalidOperationException(
-                    $"Charakter '{credential.CharacterName}' ist in der autoritativen SH3/20-Liste nicht vorhanden.");
+                    $"Charakter '{credential.CharacterName}' ist in der autoritativen SH3/20-Liste nicht vorhanden und Auto-Create ist für dieses Manifest deaktiviert.");
             }
 
             if (string.IsNullOrWhiteSpace(options.CharacterCreateTemplatePath))
@@ -1300,6 +1472,14 @@ public sealed class FiestaHeadlessLoadClient
         var zero = source.IndexOf((byte)0);
         if (zero >= 0) source = source[..zero];
         return Encoding.ASCII.GetString(source).Trim();
+    }
+
+    private sealed class FiestaWorldCharacterNotVisibleException : InvalidOperationException
+    {
+        public FiestaWorldCharacterNotVisibleException(string message)
+            : base(message)
+        {
+        }
     }
 
     private sealed class FiestaWorldCharacterLoginRejectedException : InvalidOperationException
