@@ -70,6 +70,8 @@ public sealed class FiestaLoadRampCoordinator
 
         var ready = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var failed = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var lastZoneHeartbeatAck = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+        var lastClientProgress = new ConcurrentDictionary<string, FiestaHeadlessClientProgress>(StringComparer.OrdinalIgnoreCase);
         var tasks = new List<Task<FiestaHeadlessProbeResult>>(finalTarget);
         var stageResults = new List<FiestaLoadRampStageResult>(targets.Length);
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -120,6 +122,8 @@ public sealed class FiestaLoadRampCoordinator
                         sessionCts.Token,
                         p =>
                         {
+                            lastClientProgress[p.Username] = p;
+
                             if (p.Failed)
                             {
                                 ready.TryRemove(p.Username, out _);
@@ -130,6 +134,17 @@ public sealed class FiestaLoadRampCoordinator
                                     ready.Count,
                                     baselinePlayers + ready.Count,
                                     $"{p.Username}/{p.CharacterName}: {p.Stage} · {p.Detail}"));
+                                return;
+                            }
+
+                            var isHeartbeatAck =
+                                p.Stage == FiestaLoadClientStage.Holding
+                                && p.Detail.StartsWith("ZONE_HEARTBEAT_ACK", StringComparison.Ordinal);
+                            if (isHeartbeatAck)
+                            {
+                                lastZoneHeartbeatAck[p.Username] = p.TimestampUtc;
+                                // Keep high-frequency heartbeat telemetry internal. It is surfaced
+                                // only when a stage fails, so hundreds of sessions do not flood WPF.
                                 return;
                             }
 
@@ -270,7 +285,13 @@ public sealed class FiestaLoadRampCoordinator
                     TimestampUtc = DateTimeOffset.UtcNow,
                     Detail = stagePassed
                         ? $"PASS: {target:N0} Simulatoren ready, ShinePlayer {actualPlayers:N0}/{observation.Pools.PlayerLimit:N0} · {exactSamples} exakte Samples."
-                        : $"FAIL: Simulatoren ready={ready.Count:N0}; ShinePlayer erwartet {expectedPlayers:N0}, gemessen {actualPlayers:N0} nach {verificationSamples} Verifikations-Samples."
+                        : $"FAIL: Simulatoren ready={ready.Count:N0}; ShinePlayer erwartet {expectedPlayers:N0}, gemessen {actualPlayers:N0} nach {verificationSamples} Verifikations-Samples. " +
+                          BuildHeartbeatMismatchDetail(
+                              ready,
+                              lastZoneHeartbeatAck,
+                              lastClientProgress,
+                              credentials.Clients,
+                              DateTimeOffset.UtcNow)
                 });
 
                 progress?.Invoke(new FiestaLoadRampProgress(
@@ -384,6 +405,49 @@ public sealed class FiestaLoadRampCoordinator
                 catch { }
             }
         }
+    }
+
+    private static string BuildHeartbeatMismatchDetail(
+        ConcurrentDictionary<string, byte> ready,
+        ConcurrentDictionary<string, DateTimeOffset> lastZoneHeartbeatAck,
+        ConcurrentDictionary<string, FiestaHeadlessClientProgress> lastClientProgress,
+        IReadOnlyList<FiestaLoadClientCredential> credentials,
+        DateTimeOffset now)
+    {
+        var freshnessCutoff = now - TimeSpan.FromSeconds(25);
+        var readyUsers = ready.Keys
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var fresh = readyUsers
+            .Where(user => lastZoneHeartbeatAck.TryGetValue(user, out var at) && at >= freshnessCutoff)
+            .ToArray();
+        var stale = readyUsers
+            .Where(user => !lastZoneHeartbeatAck.TryGetValue(user, out var at) || at < freshnessCutoff)
+            .Take(12)
+            .Select(user =>
+            {
+                var credential = credentials.FirstOrDefault(x =>
+                    x.Username.Equals(user, StringComparison.OrdinalIgnoreCase));
+                var character = credential?.CharacterName ?? "?";
+                var progressAge = lastClientProgress.TryGetValue(user, out var state)
+                    ? Math.Max(0, (now - state.TimestampUtc).TotalSeconds)
+                    : double.NaN;
+                var ageText = double.IsNaN(progressAge) ? "kein Progress" : $"letztes Event vor {progressAge:N1}s";
+                return $"{user}/{character} ({ageText})";
+            })
+            .ToArray();
+
+        var neverAcked = readyUsers.Count(user => !lastZoneHeartbeatAck.ContainsKey(user));
+        var staleTotal = readyUsers.Length - fresh.Length;
+        var sample = stale.Length == 0
+            ? "keine"
+            : string.Join(", ", stale);
+
+        return
+            $"Zone-Heartbeat frisch <=25s: {fresh.Length:N0}/{readyUsers.Length:N0}; " +
+            $"stale/nie bestätigt: {staleTotal:N0} (davon nie SH2/5: {neverAcked:N0}). " +
+            $"Beispiele: {sample}.";
     }
 
     private static FiestaLoadRampResult BuildFailure(
