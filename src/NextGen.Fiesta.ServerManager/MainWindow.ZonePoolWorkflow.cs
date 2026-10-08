@@ -366,6 +366,8 @@ public partial class MainWindow
         identityRow.Children.Add(_zoneLoadIdentityPrefixBox);
         identityRow.Children.Add(CreateZonePoolButton("Auto-Register Credentials erzeugen", false,
             () => RunZonePoolUiActionAsync("Load-Identitäten", GenerateLoadIdentitiesAsync)));
+        identityRow.Children.Add(CreateZonePoolButton("Identitäten vorprovisionieren", true,
+            RunLoadIdentityProvisioningUiAsync));
         stack.Children.Add(identityRow);
 
         var networkRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
@@ -412,7 +414,7 @@ public partial class MainWindow
 
         _zoneLoadStatus = new TextBlock
         {
-            Text = "Noch kein Player-Loadtest ausgeführt. Capture mit 'Stop + importieren' abschließen; der Charaktername wird bei eindeutigem CH6/1 automatisch erkannt. Für Auto-Create muss der Mitschnitt zusätzlich eine echte Charaktererstellung enthalten.",
+            Text = "Noch kein Player-Loadtest ausgeführt. Empfohlene Reihenfolge: Capture importieren → Auto-Register Credentials erzeugen → Identitäten vorprovisionieren → Ramp B. Ramp B verwendet bewusst kein Account-/Character-Auto-Create mehr.",
             Foreground = (Brush)FindResource("Muted"),
             FontSize = 9,
             TextWrapping = TextWrapping.Wrap
@@ -630,6 +632,157 @@ public partial class MainWindow
         return detail;
     }
 
+    private async Task RunLoadIdentityProvisioningUiAsync()
+    {
+        if (_zonePoolWorkflowBusy)
+        {
+            SetZoneLoadStatus("Eine Zone-Pool-/Load-Aktion läuft bereits.");
+            return;
+        }
+
+        _zonePoolWorkflowBusy = true;
+        _zoneLoadRampCancellation?.Dispose();
+        _zoneLoadRampCancellation = new CancellationTokenSource();
+        var cancellation = _zoneLoadRampCancellation;
+
+        try
+        {
+            var clientProfile = _zoneLoadClientProfilePathBox?.Text.Trim();
+            var characterCreateTemplate = _zoneLoadCharacterCreateTemplatePathBox?.Text.Trim();
+            var credentials = _zoneLoadCredentialPathBox?.Text.Trim();
+            var zoneTemplate = _zoneLoadTemplatePathBox?.Text.Trim();
+
+            if (string.IsNullOrWhiteSpace(clientProfile) || !File.Exists(clientProfile))
+                throw new InvalidOperationException(
+                    "Capture-basiertes Client-Profil mit CH3/15 fehlt. Capture erneut importieren oder Profil auswählen.");
+            var validatedClientProfile = FiestaCapturedClientProfile.Load(clientProfile);
+            if (!validatedClientProfile.HasCapturedWorldClientKey)
+                throw new InvalidOperationException(
+                    "Client-Profil enthält keinen vollständigen capture-basierten CH3/15 WorldClientKey-Body.");
+            if (string.IsNullOrWhiteSpace(credentials) || !File.Exists(credentials))
+                throw new InvalidOperationException("Credential-Manifest fehlt.");
+
+            var credentialManifest = FiestaLoadCredentialManifest.Load(credentials);
+            if (!credentialManifest.IsLoginAutoRegistrationCompatible(out var compatibility))
+                throw new InvalidOperationException(compatibility);
+
+            if (credentialManifest.Clients.Any(x => x.CreateCharacterIfMissing)
+                && (string.IsNullOrWhiteSpace(characterCreateTemplate) || !File.Exists(characterCreateTemplate)))
+            {
+                throw new InvalidOperationException(
+                    "Vorprovisionierung benötigt für fehlende Charaktere das capture-basierte CH5/1 CharacterCreate-Template.");
+            }
+
+            var loginHost = string.IsNullOrWhiteSpace(_zoneLoadLoginHostBox?.Text)
+                ? "127.0.0.1"
+                : _zoneLoadLoginHostBox.Text.Trim();
+            var loginPort = ParseZoneLoadInt(_zoneLoadLoginPortBox, "Login-Port", 1, 65535);
+            var worldId = ParseZoneLoadInt(_zoneLoadWorldIdBox, "World-ID", 0, 255);
+            var clientYear = ParseZoneLoadInt(_zoneLoadClientYearBox, "Client-Year", 1, ushort.MaxValue);
+            var clientVersion = ParseZoneLoadInt(_zoneLoadClientVersionBox, "Client-Version", 1, ushort.MaxValue);
+            var fileHash = _zoneLoadFileHashBox?.Text.Trim();
+            if (string.IsNullOrWhiteSpace(fileHash) || fileHash.Equals("optional", StringComparison.OrdinalIgnoreCase))
+                fileHash = null;
+
+            var clientOptions = new FiestaHeadlessProbeOptions
+            {
+                LoginHost = loginHost,
+                LoginPort = loginPort,
+                WorldId = checked((byte)worldId),
+                ClientYear = checked((ushort)clientYear),
+                ClientVersion = checked((ushort)clientVersion),
+                FileHash = fileHash,
+                ClientCaptureProfilePath = clientProfile,
+                ZoneTransferTemplatePath =
+                    !string.IsNullOrWhiteSpace(zoneTemplate) && File.Exists(zoneTemplate)
+                        ? zoneTemplate
+                        : null,
+                CharacterCreateTemplatePath =
+                    !string.IsNullOrWhiteSpace(characterCreateTemplate) && File.Exists(characterCreateTemplate)
+                        ? characterCreateTemplate
+                        : null,
+                StepTimeout = TimeSpan.FromSeconds(60),
+                ZoneLoginTimeout = TimeSpan.FromSeconds(90),
+                HoldDuration = TimeSpan.Zero
+            };
+
+            SetZoneLoadStatus(
+                $"IDENTITY PROVISION · {credentialManifest.Clients.Count:N0} Identitäten werden mit maximal 4 parallelen Originalprotokoll-Sessions vorbereitet. " +
+                "Es werden keine Spieler gehalten; jede Identität muss SH3/20 + Charakterauswahl + SH4/3 bestehen.");
+
+            var result = await new FiestaLoadIdentityProvisioner().ProvisionAsync(
+                new FiestaLoadIdentityProvisionOptions
+                {
+                    CredentialManifestPath = credentials,
+                    OutputDirectory = GetZonePoolWorkDirectory(),
+                    ClientOptions = clientOptions,
+                    MaxConcurrency = 4,
+                    BatchPause = TimeSpan.FromMilliseconds(500)
+                },
+                p =>
+                {
+                    if (p.Phase == "CLIENT-FAIL"
+                        || p.Phase == "PASS"
+                        || p.Completed <= 10
+                        || (p.Completed > 0 && p.Completed % 25 == 0))
+                    {
+                        SetZoneLoadStatus(
+                            $"{p.Phase} · {p.Completed:N0}/{p.Total:N0}" +
+                            (string.IsNullOrWhiteSpace(p.Username) ? string.Empty : $" · {p.Username}") +
+                            $" · {p.Detail}");
+                    }
+                },
+                cancellation.Token);
+
+            SetZoneLoadStatus(result.Detail);
+
+            if (!result.Success)
+            {
+                MessageBox.Show(
+                    this,
+                    result.Detail,
+                    "Load Identity Provisioning",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
+            if (_zoneLoadCredentialPathBox is not null)
+                _zoneLoadCredentialPathBox.Text = result.ProvisionedManifestPath;
+
+            MessageBox.Show(
+                this,
+                result.Detail +
+                Environment.NewLine + Environment.NewLine +
+                "Das neue provisionierte Manifest wurde automatisch als Credentials ausgewählt. " +
+                "Ramp B kann damit ohne Account-/Character-Auto-Create gestartet werden.",
+                "Load Identity Provisioning",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            SetZoneLoadStatus("Identity-Provisioning abgebrochen.");
+        }
+        catch (Exception ex)
+        {
+            SetZoneLoadStatus("Identity-Provisioning FEHLER: " + ex.Message);
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "Load Identity Provisioning",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            _zonePoolWorkflowBusy = false;
+            cancellation.Dispose();
+            if (ReferenceEquals(_zoneLoadRampCancellation, cancellation))
+                _zoneLoadRampCancellation = null;
+        }
+    }
+
     private async Task RunPlayerLoadRampUiAsync(bool singleClientOnly)
     {
         if (_zonePoolWorkflowBusy)
@@ -664,9 +817,17 @@ public partial class MainWindow
             if (!credentialManifest.IsLoginAutoRegistrationCompatible(out var credentialCompatibility))
                 throw new InvalidOperationException(credentialCompatibility);
 
+            if (!singleClientOnly && credentialManifest.Clients.Any(x => x.CreateCharacterIfMissing))
+            {
+                throw new InvalidOperationException(
+                    "Der Kapazitäts-Ramp B akzeptiert nur ein vorprovisioniertes Benchmark-Manifest ohne Auto-Create. " +
+                    "Bitte zuerst 'Identitäten vorprovisionieren' ausführen. So werden Account-/Character-Erstellung und ShinePlayer-Lastmessung strikt getrennt.");
+            }
+
             SetZoneLoadStatus(
                 credentialCompatibility +
-                " · Dieses Manifest wird für den folgenden Player-Loadtest verwendet.");
+                " · Dieses Manifest wird für den folgenden Player-Loadtest verwendet." +
+                (!singleClientOnly ? " · Auto-Create ist für den Benchmark deaktiviert." : string.Empty));
 
             var loginHost = string.IsNullOrWhiteSpace(_zoneLoadLoginHostBox?.Text)
                 ? "127.0.0.1"
