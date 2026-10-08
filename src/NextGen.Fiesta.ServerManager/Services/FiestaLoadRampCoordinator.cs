@@ -122,6 +122,7 @@ public sealed class FiestaLoadRampCoordinator
                         {
                             if (p.Failed)
                             {
+                                ready.TryRemove(p.Username, out _);
                                 failed[p.Username] = $"{p.Stage}: {p.Detail}";
                                 progress?.Invoke(new FiestaLoadRampProgress(
                                     "CLIENT-FAIL",
