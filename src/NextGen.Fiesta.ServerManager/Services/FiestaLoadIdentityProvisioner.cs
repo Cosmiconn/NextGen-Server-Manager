@@ -41,11 +41,28 @@ public sealed class FiestaLoadIdentityProvisioner
             };
         }
 
+        var traceDirectory = Path.GetFullPath(options.OutputDirectory);
+        Directory.CreateDirectory(traceDirectory);
+        var tracePath = Path.Combine(traceDirectory,
+            $"provisioning-trace-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.log");
+        using var traceWriter = new StreamWriter(tracePath, false, new UTF8Encoding(false))
+        {
+            AutoFlush = true
+        };
+        var traceLock = new object();
+        void Trace(string phase, string username, string detail)
+        {
+            var safe = detail.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
+            lock (traceLock)
+                traceWriter.WriteLine($"{DateTimeOffset.UtcNow:O}\t{phase}\t{username}\t{safe}");
+        }
+
         var total = manifest.Clients.Count;
         var completed = 0;
         var createdOrVerified = new List<FiestaLoadClientCredential>(total);
         var failures = new List<string>();
 
+        Trace("START", string.Empty, $"Total={total}; MaxConcurrency={options.MaxConcurrency}");
         progress?.Invoke(new FiestaLoadIdentityProvisionProgress(
             "START",
             completed,
@@ -73,6 +90,7 @@ public sealed class FiestaLoadIdentityProvisioner
                     cancellationToken,
                     p =>
                     {
+                        Trace(p.Failed ? "CLIENT-FAIL" : p.Stage.ToString(), credential.Username, p.Detail);
                         if (p.Failed
                             || p.Stage is FiestaLoadClientStage.CharacterCreated
                                 or FiestaLoadClientStage.ZoneRedirectReceived)
