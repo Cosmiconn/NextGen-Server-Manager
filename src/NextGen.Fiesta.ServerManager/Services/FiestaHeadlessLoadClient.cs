@@ -500,7 +500,10 @@ public sealed class FiestaHeadlessLoadClient
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var effectiveTimeout = timeout < TimeSpan.FromSeconds(12)
+            ? timeout
+            : TimeSpan.FromSeconds(12);
+        var deadline = DateTime.UtcNow + effectiveTimeout;
         var probes = 0;
 
         while (DateTime.UtcNow < deadline)
@@ -553,7 +556,7 @@ public sealed class FiestaHeadlessLoadClient
         }
 
         throw new TimeoutException(
-            $"Zone PlayerReady wurde nach CH6/3 nicht durch SH2/5 bestätigt ({probes:N0} aktive CH2/4-Probe(n) in {timeout.TotalSeconds:N0}s).");
+            $"Zone PlayerReady wurde nach CH6/3 nicht durch SH2/5 bestätigt ({probes:N0} aktive CH2/4-Probe(n) in {effectiveTimeout.TotalSeconds:N0}s).");
     }
 
     private static bool IsTransientInitialWorldTransportFailure(Exception ex)
