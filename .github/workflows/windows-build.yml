@@ -163,6 +163,9 @@ jobs:
             if ($startupText -notmatch 'LOAD_IDENTITY_SELFTEST PASS') {
               throw 'NA2016 load identity generator selftest did not report PASS.'
             }
+            if ($startupText -notmatch 'LOAD_IDENTITY_PROVISION_SELFTEST PASS') {
+              throw 'NA2016 isolated identity provisioning selftest did not report PASS.'
+            }
             if ($startupText -notmatch 'ZONE_LISTENER_REWRITE_SELFTEST PASS') {
               throw 'NA2016 Zone listener CRLF rewrite selftest did not report PASS.'
             }
