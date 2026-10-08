@@ -901,7 +901,7 @@ public sealed class FiestaHeadlessLoadClient
                     $"{role}: Fiesta-Verbindung wurde vom Server geschlossen · {HeartbeatTelemetry()}.",
                     ex);
             }
-            catch (IOException ex) when (allowRemoteClose)
+            catch (IOException) when (allowRemoteClose)
             {
                 return;
             }
