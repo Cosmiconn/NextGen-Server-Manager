@@ -16,6 +16,7 @@ public sealed class FiestaHeadlessLoadClient
     private static readonly TimeSpan DefaultStepTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ActiveHeartbeatInterval = TimeSpan.FromSeconds(10);
     private const int InitialWorldTransferMaxAttempts = 5;
+    private const int InitialZoneTransferMaxAttempts = 4;
 
     public async Task<FiestaHeadlessProbeResult> ProbeAndHoldAsync(
         FiestaHeadlessProbeOptions options,
@@ -130,25 +131,59 @@ public sealed class FiestaHeadlessLoadClient
             await using var retainedWorldConnection = retainedWorldEntry.WorldConnection;
             SetStage(FiestaLoadClientStage.ZoneRedirectReceived);
 
-            await using var zoneConnection = await FiestaWireConnection.ConnectAsync(
-                zone.Host,
-                zone.Port,
-                options.StepTimeout,
-                cancellationToken);
-            SetStage(FiestaLoadClientStage.ZoneConnected);
-
+            FiestaWireConnection? authenticatedZoneConnection = null;
             var zoneTransferPayload = BuildZoneTransferPayload(options, credential, randomId);
-            await zoneConnection.SendDecryptedPayloadAsync(zoneTransferPayload, cancellationToken);
 
-            // Real NA2016 Zone login is NC_MAP_LOGIN_REQ (CH6/1) -> initialization cascade ->
-            // NC_MAP_LOGIN_ACK (SH6/2) -> NC_MAP_LOGINCOMPLETE_CMD (CH6/3).
-            // SH4/72 (NC_CHAR_CLIENT_GAME_CMD) is only one item inside that cascade and arrives
-            // before SH6/2 in the real capture. Sending CH6/3 at SH4/72 leaves only a live TCP
-            // session but does not complete the authoritative ShinePlayer/map-login transition.
-            await WaitForAsync(zoneConnection, 6, 2, options.ZoneLoginTimeout, cancellationToken);
-            SetStage(
-                FiestaLoadClientStage.ZoneAuthenticated,
-                "NC_MAP_LOGIN_ACK SH6/2 empfangen");
+            for (var attempt = 1; attempt <= InitialZoneTransferMaxAttempts; attempt++)
+            {
+                FiestaWireConnection? candidate = null;
+                try
+                {
+                    candidate = await FiestaWireConnection.ConnectAsync(
+                        zone.Host,
+                        zone.Port,
+                        options.StepTimeout,
+                        cancellationToken);
+                    SetStage(FiestaLoadClientStage.ZoneConnected);
+
+                    await candidate.SendDecryptedPayloadAsync(zoneTransferPayload, cancellationToken);
+
+                    // Real NA2016 Zone login is NC_MAP_LOGIN_REQ (CH6/1) -> initialization cascade ->
+                    // NC_MAP_LOGIN_ACK (SH6/2) -> NC_MAP_LOGINCOMPLETE_CMD (CH6/3).
+                    // A retry is permitted only BEFORE SH6/2. After ZoneAuthenticated the client
+                    // is authoritative and any disconnect remains a hard failure.
+                    await WaitForAsync(candidate, 6, 2, options.ZoneLoginTimeout, cancellationToken);
+                    authenticatedZoneConnection = candidate;
+                    candidate = null;
+                    SetStage(
+                        FiestaLoadClientStage.ZoneAuthenticated,
+                        $"NC_MAP_LOGIN_ACK SH6/2 empfangen · Zone-Handoff Versuch {attempt}/{InitialZoneTransferMaxAttempts}");
+                    break;
+                }
+                catch (Exception ex)
+                    when (IsTransientInitialZoneTransferFailure(ex)
+                          && attempt < InitialZoneTransferMaxAttempts)
+                {
+                    if (candidate is not null)
+                        await candidate.DisposeAsync();
+
+                    var delay = GetInitialZoneTransferRetryDelay(credential.Username, attempt);
+                    SetStage(
+                        FiestaLoadClientStage.ZoneConnected,
+                        $"Transienter Zone-Handoff vor SH6/2 · Retry {attempt + 1}/{InitialZoneTransferMaxAttempts} in {delay.TotalMilliseconds:N0} ms · {ex.Message}");
+                    await Task.Delay(delay, cancellationToken);
+                }
+                catch
+                {
+                    if (candidate is not null)
+                        await candidate.DisposeAsync();
+                    throw;
+                }
+            }
+
+            await using var zoneConnection = authenticatedZoneConnection
+                ?? throw new InvalidOperationException(
+                    $"Zone-Handoff erreichte SH6/2 nach {InitialZoneTransferMaxAttempts} Versuch(en) nicht.");
 
             await zoneConnection.SendPacketAsync(
                 6,
@@ -339,6 +374,26 @@ public sealed class FiestaHeadlessLoadClient
                     "Initial-World-Transportklassifizierung ist zu breit oder zu eng.");
             }
 
+            if (!IsTransientInitialZoneTransferFailure(new EndOfStreamException())
+                || !IsTransientInitialZoneTransferFailure(new TimeoutException())
+                || !IsTransientInitialZoneTransferFailure(new InvalidDataException("Fiesta-Frame meldet Länge 0."))
+                || !IsTransientInitialZoneTransferFailure(new InvalidOperationException("World/Zone meldete SH4/2 ConnectError."))
+                || IsTransientInitialZoneTransferFailure(new InvalidOperationException("SH6/2 bereits empfangen; späterer Fehler")))
+            {
+                throw new InvalidDataException(
+                    "Initial-Zone-Retryklassifizierung ist zu breit oder zu eng.");
+            }
+
+            var zoneRetry1 = GetInitialZoneTransferRetryDelay("r_ngl000240", 1);
+            var zoneRetry2 = GetInitialZoneTransferRetryDelay("r_ngl000240", 2);
+            if (zoneRetry1 < TimeSpan.FromMilliseconds(750)
+                || zoneRetry1 > TimeSpan.FromMilliseconds(1250)
+                || zoneRetry2 <= zoneRetry1)
+            {
+                throw new InvalidDataException(
+                    $"Initial-Zone-Retry-Backoff ist ungültig: {zoneRetry1.TotalMilliseconds:N0}/{zoneRetry2.TotalMilliseconds:N0} ms.");
+            }
+
             var heartbeatRequest = BuildPacketPayload(2, 4, ReadOnlySpan<byte>.Empty);
             var heartbeatAck = BuildPacketPayload(2, 5, ReadOnlySpan<byte>.Empty);
             if (heartbeatRequest.Length != 2
@@ -363,7 +418,7 @@ public sealed class FiestaHeadlessLoadClient
 
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2/Timeout/RemoteClose bounded retry+jitter vor SH3/20 · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone CH6/1→SH6/2→CH6/3 · Holding: aktiver CH2/4 alle 10 s + SH2/5, eingehendes SH2/4→CH2/5 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2/Timeout/RemoteClose bounded retry+jitter vor SH3/20 · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone: bounded retry nur vor SH6/2 bei RemoteClose/Timeout/SH4/2/Frame0 · CH6/1→SH6/2→CH6/3 · Holding: aktiver CH2/4 alle 10 s + SH2/5, eingehendes SH2/4→CH2/5 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
@@ -431,6 +486,33 @@ public sealed class FiestaHeadlessLoadClient
            or EndOfStreamException
            or IOException
            or SocketException;
+
+    private static bool IsTransientInitialZoneTransferFailure(Exception ex)
+    {
+        if (ex is TimeoutException or EndOfStreamException or IOException or SocketException)
+            return true;
+
+        if (ex is InvalidDataException data
+            && data.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return ex is InvalidOperationException operation
+               && operation.Message.Contains("SH4/2 ConnectError", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static TimeSpan GetInitialZoneTransferRetryDelay(string username, int attempt)
+    {
+        if (attempt <= 0)
+            throw new ArgumentOutOfRangeException(nameof(attempt));
+
+        var jitterBucket = username.Aggregate(0, (sum, ch) => (sum + ch) % 5);
+        return TimeSpan.FromMilliseconds(
+            750
+            + ((attempt - 1) * 750)
+            + (jitterBucket * 125));
+    }
 
     private static bool ShouldRetryInitialWorldTransfer(string username, int attempt)
         => username.StartsWith("r_", StringComparison.OrdinalIgnoreCase)
