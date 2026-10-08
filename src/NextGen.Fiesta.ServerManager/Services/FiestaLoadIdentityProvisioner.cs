@@ -215,12 +215,12 @@ public sealed class FiestaLoadIdentityProvisioner
             {
                 CredentialManifestPath = "manifest.json",
                 OutputDirectory = Path.GetTempPath(),
-                MaxConcurrency = 4,
-                BatchPause = TimeSpan.FromMilliseconds(500),
+                MaxConcurrency = 1,
+                BatchPause = TimeSpan.FromMilliseconds(250),
                 ClientOptions = new FiestaHeadlessProbeOptions()
             };
-            if (options.MaxConcurrency is < 1 or > 8)
-                throw new InvalidDataException("Provisioning-Concurrency liegt außerhalb des sicheren Bereichs.");
+            if (options.MaxConcurrency != 1 || new FiestaLoadIdentityProvisionOptions().MaxConcurrency != 1)
+                throw new InvalidDataException("Provisioning muss standardmäßig seriell laufen.");
 
             return new FiestaLoadIdentityProvisionSelfTestResult(
                 true,
@@ -279,8 +279,8 @@ public sealed class FiestaLoadIdentityProvisionOptions
     public string CredentialManifestPath { get; init; } = string.Empty;
     public string OutputDirectory { get; init; } = string.Empty;
     public FiestaHeadlessProbeOptions ClientOptions { get; init; } = new();
-    public int MaxConcurrency { get; init; } = 4;
-    public TimeSpan BatchPause { get; init; } = TimeSpan.FromMilliseconds(500);
+    public int MaxConcurrency { get; init; } = 1;
+    public TimeSpan BatchPause { get; init; } = TimeSpan.FromMilliseconds(250);
 
     public void Validate()
     {
