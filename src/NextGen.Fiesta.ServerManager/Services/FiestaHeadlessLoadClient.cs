@@ -86,15 +86,16 @@ public sealed class FiestaHeadlessLoadClient
                             SetStage);
                         break;
                     }
-                    catch (FiestaInitialWorldTransferRejectedException ex)
-                        when (ShouldRetryInitialWorldTransfer(credential.Username, attempt))
+                    catch (Exception ex)
+                        when (IsRetryableWorldHandoffFailure(ex)
+                              && ShouldRetryInitialWorldTransfer(credential.Username, attempt))
                     {
                         var delay = GetInitialWorldTransferRetryDelay(
                             credential.Username,
                             attempt);
                         SetStage(
                             FiestaLoadClientStage.WorldConnected,
-                            $"Transienter SH4/2 beim ersten World-Handoff · Retry {attempt + 1}/{InitialWorldTransferMaxAttempts} in {delay.TotalMilliseconds:N0} ms · {ex.Message}");
+                            $"Transienter World-Handoff · Retry {attempt + 1}/{InitialWorldTransferMaxAttempts} in {delay.TotalMilliseconds:N0} ms · {ex.Message}");
                         await Task.Delay(delay, cancellationToken);
                     }
                 }
@@ -379,6 +380,14 @@ public sealed class FiestaHeadlessLoadClient
                     "Initial-World-Transportklassifizierung ist zu breit oder zu eng.");
             }
 
+            if (!IsRetryableWorldHandoffFailure(
+                    new FiestaWorldCharacterLoginRejectedException(1, "test"))
+                || IsRetryableWorldHandoffFailure(new InvalidOperationException("test")))
+            {
+                throw new InvalidDataException(
+                    "World-Character-Login-Retryklassifizierung ist zu breit oder zu eng.");
+            }
+
             if (!IsTransientInitialZoneTransferFailure(new EndOfStreamException())
                 || !IsTransientInitialZoneTransferFailure(new TimeoutException())
                 || !IsTransientInitialZoneTransferFailure(new InvalidDataException("Fiesta-Frame meldet Länge 0."))
@@ -431,7 +440,7 @@ public sealed class FiestaHeadlessLoadClient
 
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2/Timeout/RemoteClose bounded retry+jitter vor SH3/20 · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone: bounded retry nur vor SH6/2 bei RemoteClose/Timeout/SH4/2/Frame0 · CH6/1→SH6/2→CH6/3 · Holding capture-basiert: servergetriebenes SH2/4→CH2/5; kein aktives CH2/4 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff bounded retry+jitter vor SH3/20 sowie bei NC_CHAR_LOGINFAIL_ACK SH4/2 nach Charakterauswahl · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone: bounded retry nur vor SH6/2 bei RemoteClose/Timeout/SH4/2/Frame0 · CH6/1→SH6/2→CH6/3 · Holding capture-basiert: servergetriebenes SH2/4→CH2/5; kein aktives CH2/4 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
@@ -499,6 +508,10 @@ public sealed class FiestaHeadlessLoadClient
            or EndOfStreamException
            or IOException
            or SocketException;
+
+    private static bool IsRetryableWorldHandoffFailure(Exception ex)
+        => ex is FiestaInitialWorldTransferRejectedException
+           or FiestaWorldCharacterLoginRejectedException;
 
     private static bool IsTransientInitialZoneTransferFailure(Exception ex)
     {
@@ -1006,7 +1019,18 @@ public sealed class FiestaHeadlessLoadClient
             if (packet.Header == 3 && packet.Type == 9)
                 throw new InvalidOperationException("Login/World meldete SH3/9 Error.");
             if (packet.Header == 4 && packet.Type == 2)
-                throw new InvalidOperationException("World/Zone meldete SH4/2 ConnectError.");
+            {
+                var errorCode = packet.Body.Length >= 2
+                    ? BinaryPrimitives.ReadUInt16LittleEndian(packet.Body.AsSpan(0, 2))
+                    : ushort.MaxValue;
+                var body = packet.Body.Length == 0
+                    ? "<leer>"
+                    : Convert.ToHexString(packet.Body);
+                throw new FiestaWorldCharacterLoginRejectedException(
+                    errorCode,
+                    $"World meldete NC_CHAR_LOGINFAIL_ACK SH4/2 nach Charakterauswahl " +
+                    $"(err={(errorCode == ushort.MaxValue ? "<fehlt>" : errorCode.ToString())}, Body={body}).");
+            }
             if (packet.Header == 5 && packet.Type == 4)
             {
                 var code = packet.Body.Length >= 2
@@ -1276,6 +1300,17 @@ public sealed class FiestaHeadlessLoadClient
         var zero = source.IndexOf((byte)0);
         if (zero >= 0) source = source[..zero];
         return Encoding.ASCII.GetString(source).Trim();
+    }
+
+    private sealed class FiestaWorldCharacterLoginRejectedException : InvalidOperationException
+    {
+        public FiestaWorldCharacterLoginRejectedException(ushort errorCode, string message)
+            : base(message)
+        {
+            ErrorCode = errorCode;
+        }
+
+        public ushort ErrorCode { get; }
     }
 
     private sealed class FiestaInitialWorldTransferRejectedException : InvalidOperationException
