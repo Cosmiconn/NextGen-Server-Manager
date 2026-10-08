@@ -528,10 +528,13 @@ public sealed class FiestaLoadRampOptions
             checked(StageReadyTimeout.Ticks * (long)remainingReadyWindows));
         var settleBudget = TimeSpan.FromTicks(
             checked(StageSettleTime.Ticks * (long)targets.Length));
+        var verificationBudget = TimeSpan.FromTicks(
+            checked(TimeSpan.FromSeconds(5).Ticks * (long)targets.Length));
 
         return clientStartSpread
                + readyBudget
                + settleBudget
+               + verificationBudget
                + FinalStabilityDuration
                + ReadyPollInterval
                + StabilityPollInterval;
@@ -624,7 +627,7 @@ public sealed class FiestaLoadRampOptions
             return new FiestaLoadRampTimingSelfTestResult(
                 true,
                 $"LOAD RAMP TIMING SELFTEST: PASS · 1 Client benötigt {singleRequired:c} < 00:07:00 · " +
-                $"1600er Diagnoseramp mit feinen Stufen/1-s Admission/3-min Ready-Budget benötigt {rampRequired:c} < 02:00:00.");
+                $"1600er Diagnoseramp mit feinen Stufen/1-s Admission/3-min Ready-Budget + 5-s Serverkonvergenz benötigt {rampRequired:c} < 02:00:00.");
         }
         catch (Exception ex)
         {
