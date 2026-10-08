@@ -582,6 +582,18 @@ public sealed class FiestaHeadlessLoadClient
                     "PostReady-World-Framingklassifizierung ist zu breit oder zu eng.");
             }
 
+            var earlyWorldSh54 = DescribeWorldSh54(
+                new FiestaPacket(5, 4, new byte[] { 0x81, 0x01 }),
+                "vor SH3/20 CharacterList (CH5/1 wurde nicht gesendet)");
+            if (!earlyWorldSh54.Contains("UInt16LE=385", StringComparison.Ordinal)
+                || !earlyWorldSh54.Contains("BodyHex=8101", StringComparison.Ordinal)
+                || !earlyWorldSh54.Contains("CH5/1 wurde nicht gesendet", StringComparison.Ordinal)
+                || earlyWorldSh54.Contains("CharacterCreationError", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "SH5/4-World-Diagnose muss die Rohbytes und die tatsächliche Protokollphase liefern.");
+            }
+
             var serverHeartbeatRequest = BuildPacketPayload(2, 4, ReadOnlySpan<byte>.Empty);
             var clientHeartbeatAck = BuildPacketPayload(2, 5, ReadOnlySpan<byte>.Empty);
             if (serverHeartbeatRequest.Length != 2
@@ -605,7 +617,7 @@ public sealed class FiestaHeadlessLoadClient
 
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff bounded retry+jitter vor SH3/20 sowie bei NC_CHAR_LOGINFAIL_ACK SH4/2 nach Charakterauswahl · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone: bounded retry nur vor SH6/2 bei RemoteClose/Timeout/SH4/2/Frame0 · CH6/1→SH6/2→CH6/3 · Holding capture-basiert: servergetriebenes SH2/4→CH2/5; kein aktives CH2/4 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff bounded retry+jitter vor SH3/20 sowie bei NC_CHAR_LOGINFAIL_ACK SH4/2 nach Charakterauswahl · phasengenaue SH5/4-BodyHex-Diagnose · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone: bounded retry nur vor SH6/2 bei RemoteClose/Timeout/SH4/2/Frame0 · CH6/1→SH6/2→CH6/3 · Holding capture-basiert: servergetriebenes SH2/4→CH2/5; kein aktives CH2/4 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
@@ -725,6 +737,26 @@ public sealed class FiestaHeadlessLoadClient
         return TimeSpan.FromMilliseconds(milliseconds);
     }
 
+
+    // SH5/4 may arrive even before CH5/1 CharacterCreate was sent. Keep the exact
+    // wire evidence and protocol phase instead of incorrectly claiming creation failed.
+    // UInt16LE is an observed body field, NOT a verified semantic error-code mapping.
+    private static string DescribeWorldSh54(FiestaPacket packet, string phase)
+    {
+        const int maxBodyBytes = 48;
+        var rawCode = packet.Body.Length >= 2
+            ? BinaryPrimitives.ReadUInt16LittleEndian(packet.Body.AsSpan(0, 2)).ToString()
+            : "<fehlt>";
+        var bodyHex = packet.Body.Length == 0
+            ? "<leer>"
+            : Convert.ToHexString(packet.Body.AsSpan(0, Math.Min(packet.Body.Length, maxBodyBytes)));
+        if (packet.Body.Length > maxBodyBytes)
+            bodyHex += "...";
+
+        return $"World meldete SH5/4 {phase} (UInt16LE={rawCode}, BodyLength={packet.Body.Length}, BodyHex={bodyHex}). " +
+               "Die Bedeutung des Feldes ist ohne korrelierte World-/Character-Serverlogs nicht bestätigt.";
+    }
+
     private static async Task<FiestaPacket> WaitForInitialWorldCharacterListAsync(
         FiestaWireConnection connection,
         TimeSpan timeout,
@@ -759,13 +791,8 @@ public sealed class FiestaHeadlessLoadClient
             }
 
             if (packet.Header == 5 && packet.Type == 4)
-            {
-                var code = packet.Body.Length >= 2
-                    ? BinaryPrimitives.ReadUInt16LittleEndian(packet.Body.AsSpan(0, 2))
-                    : 0;
-                throw new InvalidOperationException(
-                    $"World meldete SH5/4 CharacterCreationError ({code}).");
-            }
+                throw new InvalidOperationException(DescribeWorldSh54(
+                    packet, "vor SH3/20 CharacterList (CH5/1 wurde nicht gesendet)"));
 
             if (packet.Header == 3 && packet.Type == 20)
                 return packet;
@@ -1204,12 +1231,8 @@ public sealed class FiestaHeadlessLoadClient
                     $"(err={(errorCode == ushort.MaxValue ? "<fehlt>" : errorCode.ToString())}, Body={body}).");
             }
             if (packet.Header == 5 && packet.Type == 4)
-            {
-                var code = packet.Body.Length >= 2
-                    ? BinaryPrimitives.ReadUInt16LittleEndian(packet.Body.AsSpan(0, 2))
-                    : 0;
-                throw new InvalidOperationException($"World meldete SH5/4 CharacterCreationError ({code}).");
-            }
+                throw new InvalidOperationException(DescribeWorldSh54(
+                    packet, "nach CH4/1 Charakterauswahl (warten auf SH4/3 ZoneRedirect)"));
 
             if (packet.Header == 4 && packet.Type == 3)
                 return packet;
@@ -1277,10 +1300,10 @@ public sealed class FiestaHeadlessLoadClient
                 throw new InvalidOperationException("World/Zone meldete SH4/2 ConnectError.");
             if (packet.Header == 5 && packet.Type == 4)
             {
-                var code = packet.Body.Length >= 2
-                    ? BinaryPrimitives.ReadUInt16LittleEndian(packet.Body.AsSpan(0, 2))
-                    : 0;
-                throw new InvalidOperationException($"World meldete SH5/4 CharacterCreationError ({code}).");
+                var phase = expectedHeader == 5 && expectedType == 6
+                    ? "nach CH5/1 CharacterCreate (warten auf SH5/6)"
+                    : $"beim Warten auf SH{expectedHeader}/{expectedType} (CH5/1 noch nicht gesendet)";
+                throw new InvalidOperationException(DescribeWorldSh54(packet, phase));
             }
             if (packet.Header == expectedHeader && packet.Type == expectedType)
                 return packet;
