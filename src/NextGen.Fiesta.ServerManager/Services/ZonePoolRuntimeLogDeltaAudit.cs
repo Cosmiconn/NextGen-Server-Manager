@@ -446,14 +446,28 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
         foreach (var issue in _analyzer.Analyze(lines, path))
         {
             var isKnownScriptDebugAssertion = IsKnownTsDebugLuaAssertion(issue.Code, issue.Evidence);
+            var isKnownKqMakeBufferAssertion = IsKnownKqMakeBufferAssertion(issue.Code, issue.Evidence);
             findings.Add(new ZonePoolLogDeltaFinding
             {
                 Source = path,
-                Severity = isKnownScriptDebugAssertion ? "Info" : issue.Severity.ToString(),
-                Code = isKnownScriptDebugAssertion ? "NG-SCRIPT-DEBUG" : issue.Code ?? string.Empty,
-                Title = isKnownScriptDebugAssertion ? "AI-Script-Debugmeldung" : issue.Title ?? string.Empty,
+                Severity = isKnownScriptDebugAssertion
+                    ? "Info"
+                    : isKnownKqMakeBufferAssertion
+                        ? "Warning"
+                        : issue.Severity.ToString(),
+                Code = isKnownScriptDebugAssertion
+                    ? "NG-SCRIPT-DEBUG"
+                    : isKnownKqMakeBufferAssertion
+                        ? "NG-KQ-MAKE-BUFFER"
+                        : issue.Code ?? string.Empty,
+                Title = isKnownScriptDebugAssertion
+                    ? "AI-Script-Debugmeldung"
+                    : isKnownKqMakeBufferAssertion
+                        ? "KingdomQuest MAKE-Bufferhinweis"
+                        : issue.Title ?? string.Empty,
                 Evidence = issue.Evidence ?? string.Empty,
                 Blocking = !isKnownScriptDebugAssertion
+                           && !isKnownKqMakeBufferAssertion
                            && issue.Code is not null
                            && BlockingCodes.Contains(issue.Code)
             });
@@ -491,17 +505,37 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
                && evidence.Contains(".lua", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsKnownKqMakeBufferAssertion(string? code, string? evidence)
+    {
+        if (!string.Equals(code, "NG-CORE-0002", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(evidence))
+        {
+            return false;
+        }
+
+        return evidence.Contains("AssertClass::ac_AssertFail", StringComparison.OrdinalIgnoreCase)
+               && evidence.Contains("WorldManagerSession::wms_NC_KQ_W2Z_MAKED_CMD", StringComparison.OrdinalIgnoreCase)
+               && evidence.Contains("Buffer full[0]", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static ZonePoolLogDeltaAuditSelfTestResult RunClassificationSelfTest()
     {
         try
         {
             const string scriptDebug =
                 "19:53:45 : AssertClass::ac_AssertFail : [TS-Debug TS_Wegweiser.lua Herzschlag: Anselm bei 131600 11386, Ziel Wegpunkt 13, MoveState 1]";
+            const string kqBufferAssert =
+                "11:07:15 : AssertClass::ac_AssertFail : WorldManagerSession::wms_NC_KQ_W2Z_MAKED_CMD : Buffer full[0]";
             const string realAssert =
                 "19:53:45 : AssertClass::ac_AssertFail : ShineObjectManager invariant violated";
 
             if (!IsKnownTsDebugLuaAssertion("NG-CORE-0002", scriptDebug))
                 throw new InvalidDataException("TS-Debug Lua-Assertion wurde nicht als Script-Debug erkannt.");
+            if (!IsKnownKqMakeBufferAssertion("NG-CORE-0002", kqBufferAssert))
+                throw new InvalidDataException("Exakter KQ-MAKE Buffer-full[0]-Hinweis wurde nicht erkannt.");
+            if (IsKnownKqMakeBufferAssertion("NG-CORE-0002", realAssert)
+                || IsKnownKqMakeBufferAssertion("NG-CORE-0001", kqBufferAssert))
+                throw new InvalidDataException("KQ-Ausnahmefilter ist zu breit.");
             if (IsKnownTsDebugLuaAssertion("NG-CORE-0002", realAssert))
                 throw new InvalidDataException("Echte Server-Assertion wurde fälschlich als Script-Debug freigestellt.");
             if (IsKnownTsDebugLuaAssertion("NG-CORE-0001", scriptDebug))
@@ -509,7 +543,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
 
             return new ZonePoolLogDeltaAuditSelfTestResult(
                 true,
-                "LOG DELTA CLASSIFICATION SELFTEST: PASS · [TS-Debug *.lua] Assertions sind Info; echte NG-CORE-0002 Assertions bleiben blockierend.");
+                "LOG DELTA CLASSIFICATION SELFTEST: PASS · [TS-Debug *.lua] Assertions sind Info; exakter KQ W2Z MAKED Buffer-full[0]-Hinweis ist REVIEW; andere NG-CORE-0002 Assertions bleiben blockierend.");
         }
         catch (Exception ex)
         {
