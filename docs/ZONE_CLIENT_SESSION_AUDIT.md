@@ -132,3 +132,27 @@ Vor dem Loadgenerator wird ein zielzonenspezifischer, transaktionaler 2000er Lis
 5. die Änderung mit Backup/Manifest rückrollbar ist.
 
 Erst danach wird der Headless-Client schrittweise bis über 1500 echte `ShinePlayer` skaliert.
+
+## 9. Real-Capture-Beleg: Zone-Heartbeat-Richtung
+
+Ein lokaler Originalclient-Mitschnitt vom 2026-10-07 wurde zusätzlich byte-/streamgenau gegen den Headless-Pfad geprüft. Der relevante Zone-TCP-Stream zeigt nach dem unverschlüsselten SH2/7-XOR-Handshake folgende Reihenfolge:
+
+| Ereignis | Richtung | Zeitpunkt relativ zum Zone-TCP-Start |
+|---|---|---:|
+| CH6/1 MapLogin | Client -> Zone | ca. 0.029 s |
+| SH6/2 MapLoginAck | Zone -> Client | ca. 0.541 s |
+| CH6/3 MapLoginComplete | Client -> Zone | ca. 4.514 s |
+| SH2/4 HeartbeatReq | Zone -> Client | ca. 34.588 s |
+| CH2/5 HeartbeatAck | Client -> Zone | ca. 34.596 s |
+
+Damit ist der erste Heartbeat im Mitschnitt rund **30.07 Sekunden nach CH6/3** servergetrieben. Im untersuchten Stream existiert **kein CH2/4 vom Client** und **kein SH2/5 von der Zone**.
+
+Konsequenzen für den Loadgenerator:
+
+- Holding darf **kein aktives CH2/4** erzeugen.
+- Der Originalclient wartet auf **SH2/4** und antwortet darauf mit **CH2/5**.
+- Liveness-Telemetrie muss den Roundtrip **SH2/4 -> CH2/5** erfassen.
+- Eine Freshness-Schwelle unter 30 Sekunden ist für diesen Build falsch; der Manager verwendet deshalb ein 45-Sekunden-Diagnosefenster und unterscheidet frisch, noch nicht fällig und überfällig.
+- **SH2/5** darf nicht als notwendiger Zone-Heartbeat-Ack dieses Originalclients interpretiert werden.
+
+Dieser Capture-Beleg ersetzt die frühere, nur aus Symbolnamen abgeleitete Annahme eines client-initiierten CH2/4 -> SH2/5-Heartbeats.
