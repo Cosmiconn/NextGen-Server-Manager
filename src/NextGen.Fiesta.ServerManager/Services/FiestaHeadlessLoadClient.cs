@@ -16,6 +16,7 @@ public sealed class FiestaHeadlessLoadClient
     private static readonly TimeSpan DefaultStepTimeout = TimeSpan.FromSeconds(15);
     private const int InitialWorldTransferMaxAttempts = 5;
     private const int InitialZoneTransferMaxAttempts = 4;
+    private const int ProvisionLoginMaxAttempts = 5;
 
     public async Task<FiestaHeadlessProbeResult> ProbeAndHoldAsync(
         FiestaHeadlessProbeOptions options,
@@ -306,7 +307,7 @@ public sealed class FiestaHeadlessLoadClient
 
                 for (var attempt = 1; attempt <= InitialWorldTransferMaxAttempts; attempt++)
                 {
-                    var world = await LoginAndGetWorldRedirectAsync(
+                    var world = await LoginAndGetWorldRedirectForProvisioningAsync(
                         options,
                         credential,
                         passwordMd5,
@@ -582,6 +583,23 @@ public sealed class FiestaHeadlessLoadClient
                     "PostReady-World-Framingklassifizierung ist zu breit oder zu eng.");
             }
 
+            if (!IsTransientProvisioningLoginFailure(new EndOfStreamException())
+                || !IsTransientProvisioningLoginFailure(new InvalidDataException("Fiesta-Frame meldet Länge 0."))
+                || IsTransientProvisioningLoginFailure(new InvalidOperationException("Login/World meldete SH3/9 Error."))
+                || IsTransientProvisioningLoginFailure(new InvalidDataException("Falsches Handshake-Opcode")))
+            {
+                throw new InvalidDataException("Provisioning-Login-Retryklassifizierung ist unzulässig breit oder eng.");
+            }
+
+            var provisioningLoginRetry1 = GetProvisionLoginRetryDelay("r_ngl000002", 1);
+            var provisioningLoginRetry2 = GetProvisionLoginRetryDelay("r_ngl000002", 2);
+            if (provisioningLoginRetry1 < TimeSpan.FromMilliseconds(750)
+                || provisioningLoginRetry1 > TimeSpan.FromMilliseconds(1250)
+                || provisioningLoginRetry2 <= provisioningLoginRetry1)
+            {
+                throw new InvalidDataException("Provisioning-Login-Retry-Backoff ist ungültig.");
+            }
+
             var earlyWorldSh54 = DescribeWorldSh54(
                 new FiestaPacket(5, 4, new byte[] { 0x81, 0x01 }),
                 "vor SH3/20 CharacterList (CH5/1 wurde nicht gesendet)");
@@ -617,7 +635,7 @@ public sealed class FiestaHeadlessLoadClient
 
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff bounded retry+jitter vor SH3/20 sowie bei NC_CHAR_LOGINFAIL_ACK SH4/2 nach Charakterauswahl · phasengenaue SH5/4-BodyHex-Diagnose · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone: bounded retry nur vor SH6/2 bei RemoteClose/Timeout/SH4/2/Frame0 · CH6/1→SH6/2→CH6/3 · Holding capture-basiert: servergetriebenes SH2/4→CH2/5; kein aktives CH2/4 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff bounded retry+jitter vor SH3/20 sowie bei NC_CHAR_LOGINFAIL_ACK SH4/2 nach Charakterauswahl · phasengenaue SH5/4-BodyHex-Diagnose · getrennte Provisioning-Login-Transport-Retries · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone: bounded retry nur vor SH6/2 bei RemoteClose/Timeout/SH4/2/Frame0 · CH6/1→SH6/2→CH6/3 · Holding capture-basiert: servergetriebenes SH2/4→CH2/5; kein aktives CH2/4 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
@@ -678,6 +696,58 @@ public sealed class FiestaHeadlessLoadClient
         var world = ParseWorldRedirect(worldRedirect.Body);
         setStage(FiestaLoadClientStage.WorldRedirectReceived, string.Empty);
         return world;
+    }
+
+    // Account auto-registration is database-backed. During isolated provisioning the
+    // stock login server may close an initial handshake under short-lived pressure.
+    // Retry transport failures only; do not mask SH3/9 or other explicit rejections.
+    // This intentionally does NOT change the load benchmark's connection behavior.
+    private static async Task<FiestaEndpointRedirect> LoginAndGetWorldRedirectForProvisioningAsync(
+        FiestaHeadlessProbeOptions options,
+        FiestaLoadClientCredential credential,
+        string passwordMd5,
+        FiestaCapturedClientProfile? clientProfile,
+        CancellationToken cancellationToken,
+        Action<FiestaLoadClientStage, string> setStage)
+    {
+        for (var attempt = 1; attempt <= ProvisionLoginMaxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return await LoginAndGetWorldRedirectAsync(
+                    options, credential, passwordMd5, clientProfile, cancellationToken, setStage);
+            }
+            catch (Exception ex) when (IsTransientProvisioningLoginFailure(ex)
+                                       && !cancellationToken.IsCancellationRequested)
+            {
+                if (attempt == ProvisionLoginMaxAttempts)
+                    throw new IOException(
+                        $"Provisioning Login-Transport nach {attempt}/{ProvisionLoginMaxAttempts} Versuchen fehlgeschlagen: {ex.Message}",
+                        ex);
+
+                var delay = GetProvisionLoginRetryDelay(credential.Username, attempt);
+                setStage(FiestaLoadClientStage.None,
+                    $"Provisioning Login-Transport: Versuch {attempt}/{ProvisionLoginMaxAttempts} fehlgeschlagen " +
+                    $"({ex.GetType().Name}: {ex.Message}); erneuter Login in {delay.TotalMilliseconds:N0} ms.");
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException("Provisioning Login-Versuche unerwartet beendet.");
+    }
+
+    private static bool IsTransientProvisioningLoginFailure(Exception ex)
+        => IsTransientInitialWorldTransportFailure(ex)
+           || (ex is InvalidDataException data
+               && data.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase));
+
+    private static TimeSpan GetProvisionLoginRetryDelay(string username, int attempt)
+    {
+        if (attempt is < 1 or >= ProvisionLoginMaxAttempts)
+            throw new ArgumentOutOfRangeException(nameof(attempt));
+        var jitter = username.Aggregate(0, (sum, ch) => (sum + ch) % 5);
+        return TimeSpan.FromMilliseconds(750 * attempt + jitter * 125);
     }
 
     private static bool IsTransientInitialWorldTransportFailure(Exception ex)
