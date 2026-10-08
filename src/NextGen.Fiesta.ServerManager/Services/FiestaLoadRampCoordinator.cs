@@ -203,7 +203,7 @@ public sealed class FiestaLoadRampCoordinator
                 }
 
                 var expectedPlayers = baselinePlayers + target;
-                ZonePoolRuntimeObservation? observation = null;
+                ZonePoolRuntimeTestObservation? observation = null;
                 var exactSamples = 0;
                 var verificationSamples = 0;
 
