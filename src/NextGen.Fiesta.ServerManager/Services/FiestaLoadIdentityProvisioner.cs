@@ -115,6 +115,7 @@ public sealed class FiestaLoadIdentityProvisioner
                 {
                     createdOrVerified.Add(CloneCredential(item.Credential, createCharacterIfMissing: false));
                     completed++;
+                    Trace("VERIFIED", item.Credential.Username, item.Result.Detail);
                     progress?.Invoke(new FiestaLoadIdentityProvisionProgress(
                         "PROVISIONED",
                         completed,
@@ -126,6 +127,7 @@ public sealed class FiestaLoadIdentityProvisioner
                 {
                     failures.Add(
                         $"{item.Credential.Username}/{item.Credential.CharacterName}: {item.Result.Detail}");
+                    Trace("FAILED", item.Credential.Username, item.Result.Detail);
                 }
             }
 
@@ -139,10 +141,12 @@ public sealed class FiestaLoadIdentityProvisioner
                     ProvisionedCount = completed,
                     TotalCount = total,
                     FailureSamples = failures.Take(12).ToArray(),
+                    DiagnosticsPath = tracePath,
                     Detail =
                         $"IDENTITY PROVISION BLOCKED · {completed:N0}/{total:N0} verifiziert · " +
                         $"{failures.Count:N0} Fehler in Batch ab Index {offset + 1:N0}. · " +
-                        string.Join(" | ", failures.Take(6))
+                        string.Join(" | ", failures.Take(6)) +
+                        $" · Diagnose: {tracePath}"
                 };
             }
 
@@ -157,8 +161,9 @@ public sealed class FiestaLoadIdentityProvisioner
                 Success = false,
                 ProvisionedCount = createdOrVerified.Count,
                 TotalCount = total,
+                DiagnosticsPath = tracePath,
                 Detail =
-                    $"IDENTITY PROVISION BLOCKED · intern nur {createdOrVerified.Count:N0}/{total:N0} verifizierte Identitäten."
+                    $"IDENTITY PROVISION BLOCKED · intern nur {createdOrVerified.Count:N0}/{total:N0} verifizierte Identitäten. · Diagnose: {tracePath}"
             };
         }
 
@@ -184,6 +189,7 @@ public sealed class FiestaLoadIdentityProvisioner
             new UTF8Encoding(false));
 
         var sha = Sha256File(outputPath);
+        Trace("PASS", string.Empty, $"Verified={total}/{total}; Manifest={Path.GetFileName(outputPath)}");
         progress?.Invoke(new FiestaLoadIdentityProvisionProgress(
             "PASS",
             total,
@@ -198,10 +204,11 @@ public sealed class FiestaLoadIdentityProvisioner
             TotalCount = total,
             ProvisionedManifestPath = outputPath,
             ManifestSha256 = sha,
+            DiagnosticsPath = tracePath,
             Detail =
                 $"IDENTITY PROVISION PASS · {total:N0}/{total:N0} Accounts/Charaktere per Originalprotokoll verifiziert · " +
                 $"SH3/20 + Charakterauswahl + SH4/3 für jede Identität bestätigt · " +
-                $"Benchmark-Manifest deaktiviert Auto-Create: {Path.GetFileName(outputPath)} · SHA {sha[..12]}."
+                $"Benchmark-Manifest deaktiviert Auto-Create: {Path.GetFileName(outputPath)} · SHA {sha[..12]}. · Diagnose: {tracePath}"
         };
     }
 
@@ -334,6 +341,7 @@ public sealed class FiestaLoadIdentityProvisionResult
     public int TotalCount { get; init; }
     public string ProvisionedManifestPath { get; init; } = string.Empty;
     public string ManifestSha256 { get; init; } = string.Empty;
+    public string DiagnosticsPath { get; init; } = string.Empty;
     public IReadOnlyList<string> FailureSamples { get; init; } = Array.Empty<string>();
     public string Detail { get; init; } = string.Empty;
 }
