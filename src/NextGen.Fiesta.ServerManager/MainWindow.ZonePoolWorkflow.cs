@@ -725,7 +725,7 @@ public partial class MainWindow
 
             SetZoneLoadStatus(singleClientOnly
                 ? "1-Client-Probe läuft 5 Minuten: Login → World → Zone → ShinePlayer + Log-Audit …"
-                : "Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · 1-s Starttakt · 3-min Ready-Budget je Stufe · Zone-Handoff hat bounded Retry nur vor SH6/2 · Holding sendet aktiven CH2/4-Heartbeat alle 10 s und beantwortet SH2/4 mit CH2/5 · 5-Min-Stabilität + Log-Audit …");
+                : "Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · 1-s Starttakt · 3-min Ready-Budget je Stufe · Zone-Handoff hat bounded Retry nur vor SH6/2 · Holding folgt dem echten Capture: Zone sendet SH2/4 (~30-s-Takt), Client antwortet CH2/5; kein aktives CH2/4 · 5-Min-Stabilität + Log-Audit …");
 
             var result = await new FiestaLoadRampCoordinator().RunAsync(
                 options,
