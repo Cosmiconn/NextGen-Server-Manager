@@ -156,3 +156,34 @@ Konsequenzen für den Loadgenerator:
 - **SH2/5** darf nicht als notwendiger Zone-Heartbeat-Ack dieses Originalclients interpretiert werden.
 
 Dieser Capture-Beleg ersetzt die frühere, nur aus Symbolnamen abgeleitete Annahme eines client-initiierten CH2/4 -> SH2/5-Heartbeats.
+
+## 10. Empirischer Player-Laststand: 500 ShinePlayer verifiziert
+
+Am 2026-10-08 erreichte der capture-basierte Headless-Lasttest erstmals eine vollständig
+serverseitig verifizierte Stufe von **500 gleichzeitigen ShinePlayern** auf der zertifizierten
+Test-Zone. Die Stufe wurde nur als PASS akzeptiert, nachdem der PDB-/Runtime-Observer den
+ShinePlayer-Zähler passend zur Anzahl der Ready-Simulatoren mehrfach exakt bestätigt hatte.
+
+Der anschließende Aufbau der Stufe 600 scheiterte nicht im Zone-Login oder im ShinePlayer-Pool,
+sondern bereits bei den neu hinzukommenden World-Charakterlogins ab Identität 501. Der Server
+antwortete dort mit Department 4 / Opcode 2. Dieses Paket ist protocol-definiert als
+`NC_CHAR_LOGINFAIL_ACK` und enthält einen 16-Bit-`err`-Wert; die frühere generische
+Bezeichnung `SH4/2 ConnectError` war daher zu ungenau.
+
+Für die weitere Kapazitätszertifizierung gilt deshalb:
+
+- **500 gleichzeitige ShinePlayer sind empirisch PASS** für den getesteten Zustand.
+- Ein Fehler beim World-Charakterlogin während der Erzeugung neuer Testidentitäten ist **kein
+  Nachweis eines Zone-/ShinePlayer-Limits**.
+- Account-/Character-Provisionierung wird vom eigentlichen Rampenbenchmark getrennt.
+- Die Vorprovisionierung beweist pro Identität: Login, autoritative SH3/20 CharacterList,
+  erfolgreiche Charakterauswahl und SH4/3 ZoneRedirect; anschließend wird die World-Verbindung
+  wieder geschlossen.
+- Erst ein daraus erzeugtes Benchmark-Manifest mit deaktiviertem `CreateCharacterIfMissing`
+  darf für den vollständigen Ramp B verwendet werden.
+- `NC_CHAR_LOGINFAIL_ACK` wird einschließlich seines `ushort err` protokolliert und bei
+  `r_`-Testidentitäten nur begrenzt mit Backoff/Jitter erneut versucht.
+
+Damit vermischt der 1600er Ramp künftig nicht mehr Datenbank-/Character-Erstellung mit der
+eigentlichen Messung von World-/Zone-/ShinePlayer-Kapazität.
+
