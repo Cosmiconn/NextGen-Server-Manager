@@ -399,6 +399,15 @@ public sealed class FiestaHeadlessLoadClient
                     $"Initial-Zone-Retry-Backoff ist ungültig: {zoneRetry1.TotalMilliseconds:N0}/{zoneRetry2.TotalMilliseconds:N0} ms.");
             }
 
+            if (!IsIgnorablePostReadyWorldFrameTermination(
+                    new InvalidDataException("Fiesta-Frame meldet Länge 0."))
+                || IsIgnorablePostReadyWorldFrameTermination(
+                    new InvalidDataException("Fiesta-Frame ist abgeschnitten.")))
+            {
+                throw new InvalidDataException(
+                    "PostReady-World-Framingklassifizierung ist zu breit oder zu eng.");
+            }
+
             var serverHeartbeatRequest = BuildPacketPayload(2, 4, ReadOnlySpan<byte>.Empty);
             var clientHeartbeatAck = BuildPacketPayload(2, 5, ReadOnlySpan<byte>.Empty);
             if (serverHeartbeatRequest.Length != 2
@@ -776,6 +785,9 @@ public sealed class FiestaHeadlessLoadClient
     private static bool IsPostReadyRemoteCloseFatal(string role)
         => role.Equals("Zone", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsIgnorablePostReadyWorldFrameTermination(InvalidDataException ex)
+        => ex.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase);
+
     private static async Task HoldSessionsAsync(
         FiestaWireConnection worldConnection,
         FiestaWireConnection zoneConnection,
@@ -886,6 +898,22 @@ public sealed class FiestaHeadlessLoadClient
             {
                 throw new EndOfStreamException(
                     $"{role}: Fiesta-Verbindung wurde vom Server geschlossen · {HeartbeatTelemetry()}.",
+                    ex);
+            }
+            catch (InvalidDataException ex) when (
+                allowRemoteClose
+                && IsIgnorablePostReadyWorldFrameTermination(ex))
+            {
+                // The World socket is non-authoritative after a successful Zone handoff. Under
+                // load this build can terminate/retire that old stream with an invalid zero-sized
+                // Fiesta frame. Treat it exactly like the already tolerated World remote-close;
+                // the Zone socket remains strict and can never take this path.
+                return;
+            }
+            catch (InvalidDataException ex)
+            {
+                throw new InvalidDataException(
+                    $"{role}: ungültiges Fiesta-Framing während Holding · {ex.Message} · {HeartbeatTelemetry()}",
                     ex);
             }
             catch (IOException) when (allowRemoteClose)
