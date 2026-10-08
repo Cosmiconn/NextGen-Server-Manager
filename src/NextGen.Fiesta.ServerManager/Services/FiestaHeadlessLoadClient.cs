@@ -14,7 +14,6 @@ namespace NextGen.Fiesta.ServerManager.Services;
 public sealed class FiestaHeadlessLoadClient
 {
     private static readonly TimeSpan DefaultStepTimeout = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan ActiveHeartbeatInterval = TimeSpan.FromSeconds(10);
     private const int InitialWorldTransferMaxAttempts = 5;
     private const int InitialZoneTransferMaxAttempts = 4;
 
@@ -400,16 +399,15 @@ public sealed class FiestaHeadlessLoadClient
                     $"Initial-Zone-Retry-Backoff ist ungültig: {zoneRetry1.TotalMilliseconds:N0}/{zoneRetry2.TotalMilliseconds:N0} ms.");
             }
 
-            var heartbeatRequest = BuildPacketPayload(2, 4, ReadOnlySpan<byte>.Empty);
-            var heartbeatAck = BuildPacketPayload(2, 5, ReadOnlySpan<byte>.Empty);
-            if (heartbeatRequest.Length != 2
-                || heartbeatAck.Length != 2
-                || BinaryPrimitives.ReadUInt16LittleEndian(heartbeatRequest) != PackOpcode(2, 4)
-                || BinaryPrimitives.ReadUInt16LittleEndian(heartbeatAck) != PackOpcode(2, 5)
-                || ActiveHeartbeatInterval >= TimeSpan.FromSeconds(30))
+            var serverHeartbeatRequest = BuildPacketPayload(2, 4, ReadOnlySpan<byte>.Empty);
+            var clientHeartbeatAck = BuildPacketPayload(2, 5, ReadOnlySpan<byte>.Empty);
+            if (serverHeartbeatRequest.Length != 2
+                || clientHeartbeatAck.Length != 2
+                || BinaryPrimitives.ReadUInt16LittleEndian(serverHeartbeatRequest) != PackOpcode(2, 4)
+                || BinaryPrimitives.ReadUInt16LittleEndian(clientHeartbeatAck) != PackOpcode(2, 5))
             {
                 throw new InvalidDataException(
-                    "Aktiver Holding-Heartbeat muss CH2/4↔SH2/5 ohne Body und deutlich unter dem 30-s-Servercheck arbeiten.");
+                    "Capture-basierter Zone-Heartbeat muss SH2/4 → CH2/5 ohne Body verwenden.");
             }
 
             var retry1 = GetInitialWorldTransferRetryDelay("r_ngl000002", 1);
@@ -424,7 +422,7 @@ public sealed class FiestaHeadlessLoadClient
 
             return new FiestaProtocolSelfTestResult(
                 true,
-                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2/Timeout/RemoteClose bounded retry+jitter vor SH3/20 · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone: bounded retry nur vor SH6/2 bei RemoteClose/Timeout/SH4/2/Frame0 · CH6/1→SH6/2→CH6/3 · Holding: aktiver CH2/4 alle 10 s + SH2/5, eingehendes SH2/4→CH2/5 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
+                "NA2016 PROTOCOL SELFTEST: PASS · Login-Reihenfolge · r_-World-Handoff SH4/2/Timeout/RemoteClose bounded retry+jitter vor SH3/20 · SH3/20 Slot/CharNo · CH2/13 GameTime · SH5/6 Create-Ack · Create→Relogin · Zone: bounded retry nur vor SH6/2 bei RemoteClose/Timeout/SH4/2/Frame0 · CH6/1→SH6/2→CH6/3 · Holding capture-basiert: servergetriebenes SH2/4→CH2/5; kein aktives CH2/4 · PostReady: World-Close toleriert, Zone-Close blockiert · 64-Byte World-Transfermaterial.");
         }
         catch (Exception ex)
         {
@@ -822,48 +820,26 @@ public sealed class FiestaHeadlessLoadClient
         CancellationToken cancellationToken)
     {
         var serverHeartbeatRequests = 0;
-        var clientHeartbeatRequests = 0;
-        var clientHeartbeatAcks = 0;
-        DateTimeOffset? lastHeartbeatActivityUtc = null;
-        var nextClientHeartbeatUtc = DateTimeOffset.UtcNow + ActiveHeartbeatInterval;
+        DateTimeOffset? lastServerHeartbeatUtc = null;
 
         string HeartbeatTelemetry()
         {
-            var age = lastHeartbeatActivityUtc is null
-                ? "keine Heartbeat-Aktivität"
-                : $"letzte Heartbeat-Aktivität vor {Math.Max(0, (DateTimeOffset.UtcNow - lastHeartbeatActivityUtc.Value).TotalSeconds):N1}s";
+            var age = lastServerHeartbeatUtc is null
+                ? "noch kein SH2/4 vom Server empfangen"
+                : $"letztes SH2/4 vor {Math.Max(0, (DateTimeOffset.UtcNow - lastServerHeartbeatUtc.Value).TotalSeconds):N1}s";
 
-            return
-                $"aktiv CH2/4={clientHeartbeatRequests:N0}, SH2/5={clientHeartbeatAcks:N0}, " +
-                $"SH2/4→CH2/5={serverHeartbeatRequests:N0}, {age}";
+            return $"servergetrieben SH2/4→CH2/5={serverHeartbeatRequests:N0}, {age}";
         }
 
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                var now = DateTimeOffset.UtcNow;
-                if (now >= nextClientHeartbeatUtc)
-                {
-                    await connection.SendPacketAsync(
-                        2,
-                        4,
-                        ReadOnlyMemory<byte>.Empty,
-                        cancellationToken);
-                    clientHeartbeatRequests++;
-                    lastHeartbeatActivityUtc = DateTimeOffset.UtcNow;
-                    nextClientHeartbeatUtc = lastHeartbeatActivityUtc.Value + ActiveHeartbeatInterval;
-                }
-
-                var untilHeartbeat = nextClientHeartbeatUtc - DateTimeOffset.UtcNow;
-                var readTimeout = untilHeartbeat <= TimeSpan.Zero
-                    ? TimeSpan.FromMilliseconds(250)
-                    : untilHeartbeat < TimeSpan.FromSeconds(10)
-                        ? untilHeartbeat
-                        : TimeSpan.FromSeconds(10);
-
+                // Capture-derived NA2016 behavior: the Zone drives the heartbeat. In the real
+                // client capture the first SH2/4 arrives about 30 s after CH6/3 and the client
+                // answers with CH2/5. The client does NOT originate CH2/4.
                 var packet = await connection.ReadPacketAsync(
-                    readTimeout,
+                    TimeSpan.FromSeconds(10),
                     cancellationToken);
 
                 if (packet.Header == 2 && packet.Type == 4)
@@ -874,18 +850,16 @@ public sealed class FiestaHeadlessLoadClient
                         ReadOnlyMemory<byte>.Empty,
                         cancellationToken);
                     serverHeartbeatRequests++;
-                    lastHeartbeatActivityUtc = DateTimeOffset.UtcNow;
+                    lastServerHeartbeatUtc = DateTimeOffset.UtcNow;
+                    heartbeatProgress?.Invoke(
+                        $"ZONE_HEARTBEAT_ROUNDTRIP · SH2/4 empfangen={serverHeartbeatRequests:N0} · CH2/5 gesendet={serverHeartbeatRequests:N0}");
                     continue;
                 }
 
+                // SH2/5 is not part of the captured Zone heartbeat direction. Drain it if a
+                // nonstandard server ever sends one, but never use it as liveness evidence.
                 if (packet.Header == 2 && packet.Type == 5)
-                {
-                    clientHeartbeatAcks++;
-                    lastHeartbeatActivityUtc = DateTimeOffset.UtcNow;
-                    heartbeatProgress?.Invoke(
-                        $"ZONE_HEARTBEAT_ACK · CH2/4 gesendet={clientHeartbeatRequests:N0} · SH2/5 empfangen={clientHeartbeatAcks:N0}");
                     continue;
-                }
 
                 if (packet.Header == 4 && packet.Type == 2)
                 {
@@ -897,7 +871,8 @@ public sealed class FiestaHeadlessLoadClient
             }
             catch (TimeoutException)
             {
-                // Timeout only advances the loop so an active CH2/4 heartbeat can be sent on time.
+                // Expected: the captured original Zone heartbeat period is roughly 30 seconds,
+                // so several 10-second read timeouts can occur between valid SH2/4 requests.
             }
             catch (EndOfStreamException) when (allowRemoteClose)
             {
