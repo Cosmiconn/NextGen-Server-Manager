@@ -707,7 +707,7 @@ public partial class MainWindow
             };
 
             SetZoneLoadStatus(
-                $"IDENTITY PROVISION · {credentialManifest.Clients.Count:N0} Identitäten werden mit maximal 4 parallelen Originalprotokoll-Sessions vorbereitet. " +
+                $"IDENTITY PROVISION · {credentialManifest.Clients.Count:N0} Identitäten werden mit einer seriellen Originalprotokoll-Session vorbereitet. " +
                 "Es werden keine Spieler gehalten; jede Identität muss SH3/20 + Charakterauswahl + SH4/3 bestehen.");
 
             var result = await new FiestaLoadIdentityProvisioner().ProvisionAsync(
@@ -716,8 +716,8 @@ public partial class MainWindow
                     CredentialManifestPath = credentials,
                     OutputDirectory = GetZonePoolWorkDirectory(),
                     ClientOptions = clientOptions,
-                    MaxConcurrency = 4,
-                    BatchPause = TimeSpan.FromMilliseconds(500)
+                    MaxConcurrency = 1,
+                    BatchPause = TimeSpan.FromMilliseconds(250)
                 },
                 p =>
                 {
