@@ -833,25 +833,49 @@ public sealed class FiestaHeadlessLoadClient
     {
         var serverHeartbeatRequests = 0;
         DateTimeOffset? lastServerHeartbeatUtc = null;
+        var sessionStartedUtc = DateTimeOffset.UtcNow;
+        var recentServerPackets = new Queue<(DateTimeOffset At, string Summary)>();
 
-        string HeartbeatTelemetry()
+        void RememberServerPacket(FiestaPacket packet)
         {
-            var age = lastServerHeartbeatUtc is null
-                ? "noch kein SH2/4 vom Server empfangen"
-                : $"letztes SH2/4 vor {Math.Max(0, (DateTimeOffset.UtcNow - lastServerHeartbeatUtc.Value).TotalSeconds):N1}s";
+            var previewLength = Math.Min(packet.Body.Length, 8);
+            var preview = previewLength == 0
+                ? "-"
+                : Convert.ToHexString(packet.Body.AsSpan(0, previewLength));
+            recentServerPackets.Enqueue((
+                DateTimeOffset.UtcNow,
+                $"SH{packet.Header}/{packet.Type} body={packet.Body.Length:N0} preview={preview}"));
+            while (recentServerPackets.Count > 6)
+                recentServerPackets.Dequeue();
+        }
 
-            return $"servergetrieben SH2/4→CH2/5={serverHeartbeatRequests:N0}, {age}";
+        string HoldingTelemetry()
+        {
+            var now = DateTimeOffset.UtcNow;
+            var heartbeatAge = lastServerHeartbeatUtc is null
+                ? "noch kein SH2/4 vom Server empfangen"
+                : $"letztes SH2/4 vor {Math.Max(0, (now - lastServerHeartbeatUtc.Value).TotalSeconds):N1}s";
+            var recent = recentServerPackets.Count == 0
+                ? "keine sonstigen Serverpakete"
+                : string.Join(", ", recentServerPackets.Select(x =>
+                    $"{x.Summary} vor {Math.Max(0, (now - x.At).TotalSeconds):N1}s"));
+
+            return
+                $"Sessionalter {Math.Max(0, (now - sessionStartedUtc).TotalSeconds):N1}s · " +
+                $"servergetrieben SH2/4→CH2/5={serverHeartbeatRequests:N0}, {heartbeatAge} · " +
+                $"letzte Nicht-HB-Pakete: {recent}";
         }
 
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                // Capture-derived NA2016 behavior: the Zone drives the heartbeat. In the real
-                // client capture the first SH2/4 arrives about 30 s after CH6/3 and the client
-                // answers with CH2/5. The client does NOT originate CH2/4.
+                // Capture-derived NA2016 behavior: the Zone drives the heartbeat. The original
+                // client capture shows an interval of about 30 s. Use a timeout ABOVE that period
+                // so hundreds of idle load clients do not create synchronized 10-second
+                // cancellation/restart churn on their NetworkStream reads.
                 var packet = await connection.ReadPacketAsync(
-                    TimeSpan.FromSeconds(10),
+                    TimeSpan.FromSeconds(45),
                     cancellationToken);
 
                 if (packet.Header == 2 && packet.Type == 4)
@@ -876,15 +900,19 @@ public sealed class FiestaHeadlessLoadClient
                 if (packet.Header == 4 && packet.Type == 2)
                 {
                     throw new InvalidOperationException(
-                        $"{role} meldete SH4/2 ConnectError während des Haltens · {HeartbeatTelemetry()}.");
+                        $"{role} meldete SH4/2 ConnectError während des Haltens · {HoldingTelemetry()}.");
                 }
 
-                // Drain non-heartbeat traffic so the TCP receive window remains healthy.
+                RememberServerPacket(packet);
+                // Drain non-heartbeat traffic so the TCP receive window remains healthy. The
+                // packet history is retained so a later server-side disconnect can reveal which
+                // periodic challenge/status request preceded it.
             }
             catch (TimeoutException)
             {
-                // Expected: the captured original Zone heartbeat period is roughly 30 seconds,
-                // so several 10-second read timeouts can occur between valid SH2/4 requests.
+                // A 45-second idle interval is already longer than the captured ~30-second Zone
+                // heartbeat cadence. Keep waiting, but preserve the session as diagnostic
+                // evidence rather than generating high-frequency cancellation churn.
             }
             catch (EndOfStreamException) when (allowRemoteClose)
             {
@@ -897,7 +925,7 @@ public sealed class FiestaHeadlessLoadClient
             catch (EndOfStreamException ex)
             {
                 throw new EndOfStreamException(
-                    $"{role}: Fiesta-Verbindung wurde vom Server geschlossen · {HeartbeatTelemetry()}.",
+                    $"{role}: Fiesta-Verbindung wurde vom Server geschlossen · {HoldingTelemetry()}.",
                     ex);
             }
             catch (InvalidDataException ex) when (
@@ -913,7 +941,7 @@ public sealed class FiestaHeadlessLoadClient
             catch (InvalidDataException ex)
             {
                 throw new InvalidDataException(
-                    $"{role}: ungültiges Fiesta-Framing während Holding · {ex.Message} · {HeartbeatTelemetry()}",
+                    $"{role}: ungültiges Fiesta-Framing während Holding · {ex.Message} · {HoldingTelemetry()}",
                     ex);
             }
             catch (IOException) when (allowRemoteClose)
@@ -923,7 +951,7 @@ public sealed class FiestaHeadlessLoadClient
             catch (IOException ex)
             {
                 throw new IOException(
-                    $"{role}: Fiesta-Verbindung brach während Heartbeat/Holding ab · {HeartbeatTelemetry()}.",
+                    $"{role}: Fiesta-Verbindung brach während Heartbeat/Holding ab · {HoldingTelemetry()}.",
                     ex);
             }
             catch (SocketException) when (allowRemoteClose)
