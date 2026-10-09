@@ -912,8 +912,31 @@ public partial class MainWindow
             var traceDetail = File.Exists(options.DiagnosticsPath)
                 ? $"Lokaler Ramp-Trace: {options.DiagnosticsPath}"
                 : "Lokaler Ramp-Trace noch nicht erstellt (Preflight vor dem Lauf blockiert).";
+
+            // A full failure includes four attempts and up to eight packet opcodes per client.
+            // Keep that evidence in the trace, not in an unreadable multi-page MessageBox.
+            var visibleResult = result.Detail;
+            if (result.Blocked && result.FailedClientCount > 0)
+            {
+                var lastPassed = result.StageResults.LastOrDefault(x => x.Passed)?.TargetClients ?? 0;
+                var affectedUsers = result.FailedClientSamples.Take(5)
+                    .Select(x =>
+                    {
+                        var separator = x.IndexOf(':');
+                        return separator > 0 ? x[..separator] : x;
+                    })
+                    .ToArray();
+                visibleResult =
+                    $"LOAD RAMP BLOCKED · Letzte bestätigte Stufe: {lastPassed:N0}. " +
+                    $"Ready bei Abbruch: {result.FinalReadyClients:N0}. " +
+                    $"Fehlgeschlagene Clients: {result.FailedClientCount:N0} " +
+                    $"({string.Join(", ", affectedUsers)}). " +
+                    "Die vollständige CH6/1→SH6/2-Versuchshistorie und die letzten Server-Opcodes " +
+                    "stehen in der lokalen Ramp-Trace-Datei.";
+            }
+
             var combinedDetail =
-                result.Detail + Environment.NewLine + Environment.NewLine +
+                visibleResult + Environment.NewLine + Environment.NewLine +
                 traceDetail + Environment.NewLine +
                 logAudit.Detail +
                 (logAudit.Clean
