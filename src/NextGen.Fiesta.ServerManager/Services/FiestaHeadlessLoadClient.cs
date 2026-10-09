@@ -17,6 +17,7 @@ public sealed class FiestaHeadlessLoadClient
     private const int InitialWorldTransferMaxAttempts = 5;
     private const int InitialZoneTransferMaxAttempts = 4;
     private const int ProvisionLoginMaxAttempts = 5;
+    private const int RampLoginMaxAttempts = 4;
 
     public async Task<FiestaHeadlessProbeResult> ProbeAndHoldAsync(
         FiestaHeadlessProbeOptions options,
@@ -66,7 +67,7 @@ public sealed class FiestaHeadlessLoadClient
 
                 for (var attempt = 1; attempt <= InitialWorldTransferMaxAttempts; attempt++)
                 {
-                    var world = await LoginAndGetWorldRedirectAsync(
+                    var world = await LoginAndGetWorldRedirectForRampAsync(
                         options,
                         credential,
                         passwordMd5,
@@ -186,7 +187,7 @@ public sealed class FiestaHeadlessLoadClient
                     await Task.Delay(delay, cancellationToken);
                     try
                     {
-                        var renewedWorld = await LoginAndGetWorldRedirectAsync(
+                        var renewedWorld = await LoginAndGetWorldRedirectForRampAsync(
                             options, credential, passwordMd5, clientProfile,
                             cancellationToken, SetStage);
                         var renewedEntry = await PrepareWorldEntryAsync(
@@ -645,6 +646,17 @@ public sealed class FiestaHeadlessLoadClient
                 throw new InvalidDataException("Provisioning-Login-Retryklassifizierung ist unzulässig breit oder eng.");
             }
 
+            if (RampLoginMaxAttempts != 4
+                || !IsTransientRampLoginFailure(new EndOfStreamException())
+                || !IsTransientRampLoginFailure(new TimeoutException())
+                || !IsTransientRampLoginFailure(new InvalidDataException("Fiesta-Frame meldet Länge 0."))
+                || IsTransientRampLoginFailure(new InvalidOperationException("Login/World meldete SH3/9 Error."))
+                || IsTransientRampLoginFailure(new FiestaWorldCharacterLoginRejectedException(7, "SH4/2")))
+            {
+                throw new InvalidDataException(
+                    "Ramp-Login-Transport-Retries müssen begrenzt sein und dürfen keine explizite World-Ablehnung verdecken.");
+            }
+
             var provisioningLoginRetry1 = GetProvisionLoginRetryDelay("r_ngl000002", 1);
             var provisioningLoginRetry2 = GetProvisionLoginRetryDelay("r_ngl000002", 2);
             if (provisioningLoginRetry1 < TimeSpan.FromMilliseconds(750)
@@ -759,6 +771,54 @@ public sealed class FiestaHeadlessLoadClient
         setStage(FiestaLoadClientStage.WorldRedirectReceived, string.Empty);
         return world;
     }
+
+    // The ramp measures simultaneous Zone sessions, not whether an unrelated short-lived
+    // Login TCP accept occasionally closes before WorldRedirect. Retry ONLY transport
+    // failures before SH3/12. Every retry is observable in the ramp trace; explicit
+    // Login/World protocol rejections remain hard failures.
+    private static async Task<FiestaEndpointRedirect> LoginAndGetWorldRedirectForRampAsync(
+        FiestaHeadlessProbeOptions options,
+        FiestaLoadClientCredential credential,
+        string passwordMd5,
+        FiestaCapturedClientProfile? clientProfile,
+        CancellationToken cancellationToken,
+        Action<FiestaLoadClientStage, string> setStage)
+    {
+        for (var attempt = 1; attempt <= RampLoginMaxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return await LoginAndGetWorldRedirectAsync(
+                    options, credential, passwordMd5, clientProfile, cancellationToken, setStage);
+            }
+            catch (Exception ex) when (IsTransientRampLoginFailure(ex)
+                                       && !cancellationToken.IsCancellationRequested)
+            {
+                if (attempt == RampLoginMaxAttempts)
+                {
+                    throw new IOException(
+                        $"Ramp Login-Transport nach {attempt}/{RampLoginMaxAttempts} Versuchen " +
+                        $"fehlgeschlagen: {ex.GetType().Name}: {ex.Message}", ex);
+                }
+
+                var delay = GetProvisionLoginRetryDelay(credential.Username, attempt);
+                setStage(FiestaLoadClientStage.None,
+                    $"RAMP_LOGIN_RETRY · Versuch {attempt}/{RampLoginMaxAttempts} · " +
+                    $"{ex.GetType().Name}: {ex.Message} · Warte {delay.TotalMilliseconds:N0} ms " +
+                    "vor vollständigem frischem Login");
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException("Ramp Login-Versuche unerwartet beendet.");
+    }
+
+    private static bool IsTransientRampLoginFailure(Exception ex)
+        => IsTransientInitialWorldTransportFailure(ex)
+           || ex is OperationCanceledException
+           || (ex is InvalidDataException data
+               && data.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase));
 
     // Account auto-registration is database-backed. During isolated provisioning the
     // stock login server may close an initial handshake under short-lived pressure.
