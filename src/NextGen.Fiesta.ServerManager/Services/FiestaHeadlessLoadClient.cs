@@ -158,12 +158,15 @@ public sealed class FiestaHeadlessLoadClient
                     // NC_MAP_LOGIN_ACK (SH6/2) -> NC_MAP_LOGINCOMPLETE_CMD (CH6/3).
                     // A retry is permitted only BEFORE SH6/2. After ZoneAuthenticated the client
                     // is authoritative and any disconnect remains a hard failure.
-                    await WaitForInitialZoneLoginAckAsync(candidate, options.ZoneLoginTimeout, cancellationToken);
+                    var zoneAck = await WaitForInitialZoneLoginAckAsync(
+                        candidate, options.ZoneLoginTimeout, cancellationToken);
                     authenticatedZoneConnection = candidate;
                     candidate = null;
                     SetStage(
                         FiestaLoadClientStage.ZoneAuthenticated,
-                        $"NC_MAP_LOGIN_ACK SH6/2 empfangen · Zone-Handoff Versuch {attempt}/{InitialZoneTransferMaxAttempts}");
+                        $"NC_MAP_LOGIN_ACK SH6/2 empfangen · Zone-Handoff Versuch {attempt}/{InitialZoneTransferMaxAttempts} " +
+                        $"· Vor ACK: {zoneAck.ReceivedBeforeAck} Zone-Pakete · {zoneAck.ElapsedMs:N0} ms " +
+                        $"· letzte Opcodes: {zoneAck.RecentOpcodes}");
                     break;
                 }
                 catch (Exception ex)
@@ -187,31 +190,58 @@ public sealed class FiestaHeadlessLoadClient
                     await Task.Delay(delay, cancellationToken);
                     try
                     {
-                        var renewedWorld = await LoginAndGetWorldRedirectForRampAsync(
-                            options, credential, passwordMd5, clientProfile,
-                            cancellationToken, SetStage);
-                        var renewedEntry = await PrepareWorldEntryAsync(
-                            renewedWorld, options, credential, clientProfile,
-                            allowCharacterCreate: false, cancellationToken, SetStage);
-                        if (renewedEntry.CharacterCreated
-                            || renewedEntry.Zone is null
-                            || renewedEntry.WorldConnection is null)
+                        // The refreshed World ticket can itself encounter a transient
+                        // disconnect before SH3/20 while the Zone is busy. Do not discard
+                        // an otherwise recoverable Zone session on that single failed
+                        // renewal. This remains a bounded, full Login->World handshake.
+                        for (var renewal = 1; renewal <= InitialWorldTransferMaxAttempts; renewal++)
                         {
-                            if (renewedEntry.WorldConnection is not null)
-                                await renewedEntry.WorldConnection.DisposeAsync();
-                            throw new InvalidDataException(
-                                "Erneuerte World-Auswahl lieferte keine gültige Zone-/Session-Registrierung.");
-                        }
+                            cancellationToken.ThrowIfCancellationRequested();
+                            try
+                            {
+                                var renewedWorld = await LoginAndGetWorldRedirectForRampAsync(
+                                    options, credential, passwordMd5, clientProfile,
+                                    cancellationToken, SetStage);
+                                var renewedEntry = await PrepareWorldEntryAsync(
+                                    renewedWorld, options, credential, clientProfile,
+                                    allowCharacterCreate: false, cancellationToken, SetStage);
+                                if (renewedEntry.CharacterCreated
+                                    || renewedEntry.Zone is null
+                                    || renewedEntry.WorldConnection is null)
+                                {
+                                    if (renewedEntry.WorldConnection is not null)
+                                        await renewedEntry.WorldConnection.DisposeAsync();
+                                    throw new InvalidDataException(
+                                        "Erneuerte World-Auswahl lieferte keine gültige Zone-/Session-Registrierung.");
+                                }
 
-                        worldSession.Set(renewedEntry.WorldConnection);
-                        finalWorld = renewedWorld;
-                        zone = renewedEntry.Zone;
-                        randomId = renewedEntry.RandomId;
-                        characterCount = renewedEntry.CharacterCount;
-                        zoneTransferPayload = BuildZoneTransferPayload(options, credential, randomId);
-                        SetStage(FiestaLoadClientStage.ZoneRedirectReceived,
-                            $"Frischer Login→World→SH3/20→SH4/3 nach Zone-Abbruch · " +
-                            $"Versuch {attempt + 1}/{InitialZoneTransferMaxAttempts} · keine Charaktererstellung");
+                                worldSession.Set(renewedEntry.WorldConnection);
+                                finalWorld = renewedWorld;
+                                zone = renewedEntry.Zone;
+                                randomId = renewedEntry.RandomId;
+                                characterCount = renewedEntry.CharacterCount;
+                                zoneTransferPayload = BuildZoneTransferPayload(options, credential, randomId);
+                                SetStage(FiestaLoadClientStage.ZoneRedirectReceived,
+                                    $"Frischer Login→World→SH3/20→SH4/3 nach Zone-Abbruch · " +
+                                    $"Zone-Versuch {attempt + 1}/{InitialZoneTransferMaxAttempts} · " +
+                                    $"World-Erneuerung {renewal}/{InitialWorldTransferMaxAttempts} · keine Charaktererstellung");
+                                break;
+                            }
+                            catch (Exception renewalError)
+                                when (IsRetryableWorldHandoffFailure(renewalError)
+                                      && renewal < InitialWorldTransferMaxAttempts
+                                      && !cancellationToken.IsCancellationRequested)
+                            {
+                                var worldDelay = GetInitialWorldTransferRetryDelay(
+                                    credential.Username, renewal);
+                                SetStage(FiestaLoadClientStage.WorldConnected,
+                                    $"WORLD-RENEWAL-RETRY · World-Handoff nach Zone-Abbruch · " +
+                                    $"Versuch {renewal}/{InitialWorldTransferMaxAttempts} " +
+                                    $"({renewalError.GetType().Name}: {renewalError.Message}) · " +
+                                    $"warte {worldDelay.TotalMilliseconds:N0} ms");
+                                await Task.Delay(worldDelay, cancellationToken);
+                            }
+                        }
                     }
                     catch (Exception handoffError) when (!cancellationToken.IsCancellationRequested)
                     {
@@ -1372,17 +1402,21 @@ public sealed class FiestaHeadlessLoadClient
 
     // Preserve the last server opcodes and the exact point of transport termination
     // during CH6/1 -> SH6/2. No payload bytes from initialization packets are logged.
-    private static async Task<FiestaPacket> WaitForInitialZoneLoginAckAsync(
+    private static async Task<(int ReceivedBeforeAck, long ElapsedMs, string RecentOpcodes)>
+        WaitForInitialZoneLoginAckAsync(
         FiestaWireConnection connection,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        var started = Stopwatch.GetTimestamp();
         var deadline = DateTime.UtcNow + timeout;
         var recent = new Queue<string>();
         var received = 0;
 
-        string Snapshot() => $"Empfangene Zone-Pakete vor SH6/2={received}; letzte Opcodes: " +
-            (recent.Count == 0 ? "<keine>" : string.Join(", ", recent));
+        string RecentOpcodes() => recent.Count == 0 ? "<keine>" : string.Join(", ", recent);
+        string Snapshot() => $"Empfangene Zone-Pakete vor SH6/2={received}; " +
+            $"Dauer={Stopwatch.GetElapsedTime(started).TotalMilliseconds:N0}ms; " +
+            $"letzte Opcodes: {RecentOpcodes()}";
 
         while (DateTime.UtcNow < deadline)
         {
@@ -1429,7 +1463,9 @@ public sealed class FiestaHeadlessLoadClient
                     DescribeWorldSh54(packet, "während Zone-Handoff CH6/1→SH6/2") + " " + Snapshot());
 
             if (packet.Header == 6 && packet.Type == 2)
-                return packet;
+                return (received - 1,
+                    (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                    RecentOpcodes());
         }
 
         throw new TimeoutException($"Zone SH6/2 nach {timeout.TotalSeconds:N0}s nicht empfangen · {Snapshot()}.");
