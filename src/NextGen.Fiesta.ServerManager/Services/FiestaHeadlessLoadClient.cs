@@ -134,6 +134,7 @@ public sealed class FiestaHeadlessLoadClient
 
             FiestaWireConnection? authenticatedZoneConnection = null;
             var zoneTransferPayload = BuildZoneTransferPayload(options, credential, randomId);
+            var zoneFailures = new List<string>(InitialZoneTransferMaxAttempts);
 
             for (var attempt = 1; attempt <= InitialZoneTransferMaxAttempts; attempt++)
             {
@@ -145,15 +146,18 @@ public sealed class FiestaHeadlessLoadClient
                         zone.Port,
                         options.StepTimeout,
                         cancellationToken);
-                    SetStage(FiestaLoadClientStage.ZoneConnected);
+                    SetStage(FiestaLoadClientStage.ZoneConnected,
+                        $"Zone-TCP verbunden · Versuch {attempt}/{InitialZoneTransferMaxAttempts} · Ziel {zone.Host}:{zone.Port}");
 
                     await candidate.SendDecryptedPayloadAsync(zoneTransferPayload, cancellationToken);
+                    SetStage(FiestaLoadClientStage.ZoneConnected,
+                        $"CH6/1 gesendet · Versuch {attempt}/{InitialZoneTransferMaxAttempts} · warte SH6/2");
 
                     // Real NA2016 Zone login is NC_MAP_LOGIN_REQ (CH6/1) -> initialization cascade ->
                     // NC_MAP_LOGIN_ACK (SH6/2) -> NC_MAP_LOGINCOMPLETE_CMD (CH6/3).
                     // A retry is permitted only BEFORE SH6/2. After ZoneAuthenticated the client
                     // is authoritative and any disconnect remains a hard failure.
-                    await WaitForAsync(candidate, 6, 2, options.ZoneLoginTimeout, cancellationToken);
+                    await WaitForInitialZoneLoginAckAsync(candidate, options.ZoneLoginTimeout, cancellationToken);
                     authenticatedZoneConnection = candidate;
                     candidate = null;
                     SetStage(
@@ -163,22 +167,32 @@ public sealed class FiestaHeadlessLoadClient
                 }
                 catch (Exception ex)
                     when (IsTransientInitialZoneTransferFailure(ex)
+                          && !cancellationToken.IsCancellationRequested
                           && attempt < InitialZoneTransferMaxAttempts)
                 {
                     if (candidate is not null)
                         await candidate.DisposeAsync();
 
+                    zoneFailures.Add($"Versuch {attempt}: {ex.GetType().Name} · {ex.Message}");
                     var delay = GetInitialZoneTransferRetryDelay(credential.Username, attempt);
                     SetStage(
                         FiestaLoadClientStage.ZoneConnected,
-                        $"Transienter Zone-Handoff vor SH6/2 · Retry {attempt + 1}/{InitialZoneTransferMaxAttempts} in {delay.TotalMilliseconds:N0} ms · {ex.Message}");
+                        $"Transienter Zone-Handoff vor SH6/2 · Retry {attempt + 1}/{InitialZoneTransferMaxAttempts} " +
+                        $"in {delay.TotalMilliseconds:N0} ms · {ex.Message}");
                     await Task.Delay(delay, cancellationToken);
                 }
-                catch
+                catch (Exception ex)
                 {
                     if (candidate is not null)
                         await candidate.DisposeAsync();
-                    throw;
+                    if (cancellationToken.IsCancellationRequested)
+                        throw;
+
+                    zoneFailures.Add($"Versuch {attempt}: {ex.GetType().Name} · {ex.Message}");
+                    throw new InvalidOperationException(
+                        $"Zone-Handoff scheiterte vor SH6/2 bei Versuch {attempt}/{InitialZoneTransferMaxAttempts}. " +
+                        $"Verlauf: {string.Join(" | ", zoneFailures)}",
+                        ex);
                 }
             }
 
@@ -599,6 +613,14 @@ public sealed class FiestaHeadlessLoadClient
                 || provisioningLoginRetry2 <= provisioningLoginRetry1)
             {
                 throw new InvalidDataException("Provisioning-Login-Retry-Backoff ist ungültig.");
+            }
+
+            if (!IsTransientInitialZoneTransferFailure(
+                    new IOException("Zone-Verbindung während CH6/1→SH6/2 unterbrochen"))
+                || IsTransientInitialZoneTransferFailure(
+                    new InvalidOperationException("Zone meldete SH3/9 Error")))
+            {
+                throw new InvalidDataException("Zone-Handshake-Diagnose darf explizite Serverfehler nicht als Retry einstufen.");
             }
 
             var earlyWorldSh54 = DescribeWorldSh54(
@@ -1247,6 +1269,71 @@ public sealed class FiestaHeadlessLoadClient
                 throw new SocketException(ex.ErrorCode);
             }
         }
+    }
+
+    // Preserve the last server opcodes and the exact point of transport termination
+    // during CH6/1 -> SH6/2. No payload bytes from initialization packets are logged.
+    private static async Task<FiestaPacket> WaitForInitialZoneLoginAckAsync(
+        FiestaWireConnection connection,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        var recent = new Queue<string>();
+        var received = 0;
+
+        string Snapshot() => $"Empfangene Zone-Pakete vor SH6/2={received}; letzte Opcodes: " +
+            (recent.Count == 0 ? "<keine>" : string.Join(", ", recent));
+
+        while (DateTime.UtcNow < deadline)
+        {
+            FiestaPacket packet;
+            try
+            {
+                packet = await connection.ReadPacketAsync(deadline - DateTime.UtcNow, cancellationToken);
+            }
+            catch (Exception ex) when (
+                !cancellationToken.IsCancellationRequested
+                && (ex is TimeoutException or EndOfStreamException or IOException or SocketException
+                    || (ex is InvalidDataException data
+                        && data.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase))))
+            {
+                throw new IOException($"Zone-Verbindung während CH6/1→SH6/2 unterbrochen · {Snapshot()} · " +
+                    $"{ex.GetType().Name}: {ex.Message}", ex);
+            }
+
+            received++;
+            recent.Enqueue($"SH{packet.Header}/{packet.Type}({packet.Body.Length}B)");
+            while (recent.Count > 8)
+                recent.Dequeue();
+
+            if (packet.Header == 2 && packet.Type == 4)
+            {
+                await connection.SendPacketAsync(2, 5, ReadOnlyMemory<byte>.Empty, cancellationToken);
+                continue;
+            }
+
+            if (packet.Header == 3 && packet.Type == 9)
+                throw new InvalidOperationException($"Zone meldete SH3/9 Error · {Snapshot()}.");
+
+            if (packet.Header == 4 && packet.Type == 2)
+            {
+                var code = packet.Body.Length >= 2
+                    ? BinaryPrimitives.ReadUInt16LittleEndian(packet.Body.AsSpan(0, 2)).ToString()
+                    : "<fehlt>";
+                throw new InvalidOperationException(
+                    $"World/Zone meldete SH4/2 ConnectError. UInt16LE={code} · {Snapshot()}.");
+            }
+
+            if (packet.Header == 5 && packet.Type == 4)
+                throw new InvalidOperationException(
+                    DescribeWorldSh54(packet, "während Zone-Handoff CH6/1→SH6/2") + " " + Snapshot());
+
+            if (packet.Header == 6 && packet.Type == 2)
+                return packet;
+        }
+
+        throw new TimeoutException($"Zone SH6/2 nach {timeout.TotalSeconds:N0}s nicht empfangen · {Snapshot()}.");
     }
 
     private static async Task<FiestaPacket> WaitForZoneRedirectAsync(
