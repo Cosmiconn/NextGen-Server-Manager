@@ -129,7 +129,7 @@ public sealed class FiestaHeadlessLoadClient
             // Critical NA2016 invariant: the selected World TCP session must stay alive while
             // Zone verifies the character registration number. Closing World after SH4/3 makes
             // WorldManager lose the selected-character session and Zone fails with Invalid Regnum.
-            await using var retainedWorldConnection = retainedWorldEntry.WorldConnection;
+            await using var worldSession = new FiestaWorldConnectionLease(retainedWorldEntry.WorldConnection);
             SetStage(FiestaLoadClientStage.ZoneRedirectReceived);
 
             FiestaWireConnection? authenticatedZoneConnection = null;
@@ -179,7 +179,46 @@ public sealed class FiestaHeadlessLoadClient
                         FiestaLoadClientStage.ZoneConnected,
                         $"Transienter Zone-Handoff vor SH6/2 · Retry {attempt + 1}/{InitialZoneTransferMaxAttempts} " +
                         $"in {delay.TotalMilliseconds:N0} ms · {ex.Message}");
+                    // CH6/1 may consume its registration ticket even when the socket closes
+                    // before SH6/2. Replaying that same ticket on another TCP socket is
+                    // not an authoritative original-client admission proof.
+                    await worldSession.CloseAsync();
                     await Task.Delay(delay, cancellationToken);
+                    try
+                    {
+                        var renewedWorld = await LoginAndGetWorldRedirectAsync(
+                            options, credential, passwordMd5, clientProfile,
+                            cancellationToken, SetStage);
+                        var renewedEntry = await PrepareWorldEntryAsync(
+                            renewedWorld, options, credential, clientProfile,
+                            allowCharacterCreate: false, cancellationToken, SetStage);
+                        if (renewedEntry.CharacterCreated
+                            || renewedEntry.Zone is null
+                            || renewedEntry.WorldConnection is null)
+                        {
+                            if (renewedEntry.WorldConnection is not null)
+                                await renewedEntry.WorldConnection.DisposeAsync();
+                            throw new InvalidDataException(
+                                "Erneuerte World-Auswahl lieferte keine gültige Zone-/Session-Registrierung.");
+                        }
+
+                        worldSession.Set(renewedEntry.WorldConnection);
+                        finalWorld = renewedWorld;
+                        zone = renewedEntry.Zone;
+                        randomId = renewedEntry.RandomId;
+                        characterCount = renewedEntry.CharacterCount;
+                        zoneTransferPayload = BuildZoneTransferPayload(options, credential, randomId);
+                        SetStage(FiestaLoadClientStage.ZoneRedirectReceived,
+                            $"Frischer Login→World→SH3/20→SH4/3 nach Zone-Abbruch · " +
+                            $"Versuch {attempt + 1}/{InitialZoneTransferMaxAttempts} · keine Charaktererstellung");
+                    }
+                    catch (Exception handoffError) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        throw new InvalidOperationException(
+                            $"Zone-Versuch {attempt} vor SH6/2 abgebrochen ({ex.Message}); " +
+                            $"frischer World-Handoff für Versuch {attempt + 1} fehlgeschlagen: {handoffError.Message}",
+                            handoffError);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -214,7 +253,7 @@ public sealed class FiestaHeadlessLoadClient
             {
                 SetStage(FiestaLoadClientStage.Holding);
                 await HoldSessionsAsync(
-                    retainedWorldConnection,
+                    worldSession.Connection,
                     zoneConnection,
                     holdFor,
                     heartbeatDetail => progress?.Invoke(new FiestaHeadlessClientProgress(
@@ -1699,6 +1738,38 @@ public sealed class FiestaHeadlessLoadClient
         ushort RandomId,
         byte CharacterCount,
         IReadOnlyList<FiestaCharacterListEntry> Characters);
+
+    // Maintains exactly one World session through Zone authentication and Holding.
+    // A rejected pre-SH6/2 Zone transfer is not retried with a stale World ticket.
+    private sealed class FiestaWorldConnectionLease : IAsyncDisposable
+    {
+        private FiestaWireConnection? _connection;
+
+        public FiestaWorldConnectionLease(FiestaWireConnection initial)
+            => _connection = initial;
+
+        public FiestaWireConnection Connection
+            => _connection ?? throw new InvalidOperationException(
+                "Keine aktuelle World-Session für Zone-Transfer vorhanden.");
+
+        public async ValueTask CloseAsync()
+        {
+            var old = _connection;
+            _connection = null;
+            if (old is not null)
+                await old.DisposeAsync();
+        }
+
+        public void Set(FiestaWireConnection replacement)
+        {
+            ArgumentNullException.ThrowIfNull(replacement);
+            if (_connection is not null)
+                throw new InvalidOperationException("Alte World-Session muss vor dem Ersetzen geschlossen werden.");
+            _connection = replacement;
+        }
+
+        public ValueTask DisposeAsync() => CloseAsync();
+    }
 
     private sealed record FiestaWorldEntryResult(
         FiestaEndpointRedirect? Zone,
