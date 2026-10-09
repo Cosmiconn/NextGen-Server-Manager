@@ -160,17 +160,34 @@ public sealed class FiestaLoadRampCoordinator
                         sessionCts.Token,
                         p =>
                         {
+                            // Cancellation of intentionally held sessions is cleanup,
+                            // not evidence of a server-side admission failure.
+                            if (p.Failed
+                                && sessionCts.IsCancellationRequested
+                                && string.Equals(p.Detail, "Abgebrochen", StringComparison.Ordinal))
+                                return;
+
                             lastClientProgress[p.Username] = p;
 
                             if (p.Failed
-                                || p.Stage is FiestaLoadClientStage.WorldConnected
+                                || p.Detail.StartsWith("RAMP_LOGIN_RETRY", StringComparison.Ordinal)
+                                || p.Stage is FiestaLoadClientStage.LoginConnected
+                                    or FiestaLoadClientStage.VersionAccepted
+                                    or FiestaLoadClientStage.LoginAuthenticated
+                                    or FiestaLoadClientStage.WorldRedirectReceived
+                                    or FiestaLoadClientStage.WorldConnected
                                     or FiestaLoadClientStage.ZoneRedirectReceived
                                     or FiestaLoadClientStage.ZoneConnected
                                     or FiestaLoadClientStage.ZoneAuthenticated
                                     or FiestaLoadClientStage.ClientReady)
                             {
-                                Trace(p.Failed ? "CLIENT-FAIL" : p.Stage.ToString().ToUpperInvariant(),
-                                    $"{p.Username}/{p.CharacterName}: {p.Detail}");
+                                var phase = p.Failed
+                                    ? "CLIENT-FAIL"
+                                    : p.Detail.StartsWith("RAMP_LOGIN_RETRY", StringComparison.Ordinal)
+                                        ? "LOGIN-RETRY"
+                                        : p.Stage.ToString().ToUpperInvariant();
+                                Trace(phase, $"{p.Username}/{p.CharacterName}: " +
+                                    $"Stage={p.Stage}; {p.Detail}");
                             }
 
                             if (p.Failed)
@@ -469,13 +486,18 @@ public sealed class FiestaLoadRampCoordinator
                     Trace("FAIL-LIVE-ZONE", $"Observer failed: {ex.GetType().Name}: {ex.Message}");
                 }
             }
+            Trace("RAMP-SHUTDOWN-SNAPSHOT",
+                $"ReadyBeforeCleanup={ready.Count}; RealFailuresBeforeCleanup={failed.Count}; " +
+                $"VerifiedStages={stageResults.Count(x => x.Passed)}");
             sessionCts.Cancel();
             if (tasks.Count > 0)
             {
                 try { await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(15)); }
                 catch { }
             }
-            Trace("RAMP-END", $"FinalReady={ready.Count}; Failed={failed.Count}; PassedStages={stageResults.Count(x => x.Passed)}");
+            Trace("RAMP-END",
+                $"ReadyAtShutdown={ready.Count}; RealFailures={failed.Count}; " +
+                $"PassedStages={stageResults.Count(x => x.Passed)}; CleanupDisconnectsExcluded=true");
             lock (diagnosticLock)
                 diagnosticsClosed = true;
         }
