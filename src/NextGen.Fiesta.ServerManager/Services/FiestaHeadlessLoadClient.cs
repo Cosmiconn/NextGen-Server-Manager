@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -1435,6 +1436,9 @@ public sealed class FiestaHeadlessLoadClient
                     $"{ex.GetType().Name}: {ex.Message}", ex);
             }
 
+            var precedingOpcodes = packet.Header == 6 && packet.Type == 2
+                ? RecentOpcodes()
+                : string.Empty;
             received++;
             recent.Enqueue($"SH{packet.Header}/{packet.Type}({packet.Body.Length}B)");
             while (recent.Count > 8)
@@ -1465,7 +1469,7 @@ public sealed class FiestaHeadlessLoadClient
             if (packet.Header == 6 && packet.Type == 2)
                 return (received - 1,
                     (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                    RecentOpcodes());
+                    precedingOpcodes);
         }
 
         throw new TimeoutException($"Zone SH6/2 nach {timeout.TotalSeconds:N0}s nicht empfangen · {Snapshot()}.");
