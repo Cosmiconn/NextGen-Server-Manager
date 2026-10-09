@@ -30,6 +30,7 @@ public partial class MainWindow
     private TextBox? _zoneLoadCredentialPathBox;
     private TextBox? _zoneLoadIdentityCountBox;
     private TextBox? _zoneLoadIdentityPrefixBox;
+    private TextBox? _zoneLoadStartIntervalBox;
     private TextBox? _zoneLoadLoginHostBox;
     private TextBox? _zoneLoadLoginPortBox;
     private TextBox? _zoneLoadWorldIdBox;
@@ -404,6 +405,17 @@ public partial class MainWindow
             () => RunPlayerLoadRampUiAsync(singleClientOnly: true)));
         actionRow.Children.Add(CreateZonePoolButton("B · Ramp 1 → 1600", false,
             () => RunPlayerLoadRampUiAsync(singleClientOnly: false)));
+        actionRow.Children.Add(new TextBlock
+        {
+            Text = "Starttakt (s)",
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 4, 0),
+            ToolTip = "1 = bisherige Baseline; 2 oder 3 = kontrollierter Test mit geringerem Anmeldedruck"
+        });
+        _zoneLoadStartIntervalBox = CreateZoneLoadTextBox(
+            44, "Rampe B: 1..3 Sekunden zwischen Client-Starts (1 = bisherige Baseline)", "1");
+        actionRow.Children.Add(_zoneLoadStartIntervalBox);
         actionRow.Children.Add(CreateZonePoolButton("Abbrechen", false, async () =>
         {
             _zoneLoadRampCancellation?.Cancel();
@@ -840,6 +852,15 @@ public partial class MainWindow
             if (string.IsNullOrWhiteSpace(fileHash) || fileHash.Equals("optional", StringComparison.OrdinalIgnoreCase))
                 fileHash = null;
 
+            var startIntervalSeconds = singleClientOnly
+                ? 0
+                : ParseZoneLoadInt(_zoneLoadStartIntervalBox, "Starttakt in Sekunden", 1, 3);
+            // Preserve the previously validated two-hour hold budget while extending it
+            // for the extra wall time incurred by deliberate 2s/3s admission pacing.
+            var holdDuration = singleClientOnly
+                ? TimeSpan.FromMinutes(7)
+                : TimeSpan.FromHours(2) +
+                  TimeSpan.FromSeconds((startIntervalSeconds - 1) * 1600);
             var options = new FiestaLoadRampOptions
             {
                 TargetZoneExePath = target,
@@ -862,15 +883,15 @@ public partial class MainWindow
                             : null,
                     StepTimeout = singleClientOnly ? TimeSpan.FromSeconds(15) : TimeSpan.FromSeconds(60),
                     ZoneLoginTimeout = singleClientOnly ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(90),
-                    HoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(2)
+                    HoldDuration = holdDuration
                 },
                 StageTargets = singleClientOnly
                     ? new[] { 1 }
                     : FiestaLoadRampOptions.DiagnosticStageTargets,
-                ClientStartInterval = singleClientOnly ? TimeSpan.Zero : TimeSpan.FromSeconds(1),
+                ClientStartInterval = TimeSpan.FromSeconds(startIntervalSeconds),
                 StageReadyTimeout = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(3),
                 StageSettleTime = singleClientOnly ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(10),
-                SessionHoldDuration = singleClientOnly ? TimeSpan.FromMinutes(7) : TimeSpan.FromHours(2),
+                SessionHoldDuration = holdDuration,
                 FinalStabilityDuration = TimeSpan.FromMinutes(5),
                 StabilityPollInterval = TimeSpan.FromSeconds(5)
             };
@@ -888,7 +909,7 @@ public partial class MainWindow
 
             SetZoneLoadStatus(singleClientOnly
                 ? "1-Client-Probe läuft 5 Minuten: Login → World → Zone → ShinePlayer + Log-Audit …"
-                : "Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · 1-s Starttakt · 3-min Ready-Budget je Stufe · Zone-Handoff hat bounded Retry nur vor SH6/2 · Holding folgt dem echten Capture: Zone sendet SH2/4 (~30-s-Takt), Client antwortet CH2/5; kein aktives CH2/4 · 5-Min-Stabilität + Log-Audit …");
+                : "Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · {startIntervalSeconds}-s Starttakt · 3-min Ready-Budget je Stufe · Zone-Handoff hat bounded Retry nur vor SH6/2 · Holding folgt dem echten Capture: Zone sendet SH2/4 (~30-s-Takt), Client antwortet CH2/5; kein aktives CH2/4 · 5-Min-Stabilität + Log-Audit …");
 
             var result = await new FiestaLoadRampCoordinator().RunAsync(
                 options,
