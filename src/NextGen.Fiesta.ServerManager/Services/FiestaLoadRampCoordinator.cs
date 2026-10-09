@@ -451,6 +451,24 @@ public sealed class FiestaLoadRampCoordinator
         }
         finally
         {
+            // Sample the live Zone BEFORE cancelling held clients. Otherwise a failed
+            // ramp only reports client Ready, not the actual ShinePlayer occupancy at failure.
+            if (failed.Count > 0 && !cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var onFailure = _runtimeObserver.Observe(options.TargetZoneExePath, minimumUptimeSeconds: 0);
+                    Trace("FAIL-LIVE-ZONE",
+                        $"Ready={ready.Count}; Failed={failed.Count}; " +
+                        $"ShinePlayer={(onFailure.Pools is null ? "<unavailable>" : onFailure.Pools.PlayerCount.ToString())}; " +
+                        $"PoolLimit={(onFailure.Pools is null ? "<unavailable>" : onFailure.Pools.PlayerLimit.ToString())}; " +
+                        $"ObserverPassed={onFailure.Passed}; Detail={onFailure.Detail}");
+                }
+                catch (Exception ex)
+                {
+                    Trace("FAIL-LIVE-ZONE", $"Observer failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
             sessionCts.Cancel();
             if (tasks.Count > 0)
             {
