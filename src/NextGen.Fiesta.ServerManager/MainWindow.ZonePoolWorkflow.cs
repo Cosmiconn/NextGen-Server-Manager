@@ -844,6 +844,8 @@ public partial class MainWindow
             {
                 TargetZoneExePath = target,
                 CredentialManifestPath = credentials,
+                DiagnosticsPath = Path.Combine(GetZonePoolWorkDirectory(),
+                    $"player-ramp-trace-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}.log"),
                 ClientOptions = new FiestaHeadlessProbeOptions
                 {
                     LoginHost = loginHost,
@@ -907,8 +909,12 @@ public partial class MainWindow
             if (!logAudit.Success)
                 throw new InvalidOperationException("Player-Load Log-Audit konnte nicht abgeschlossen werden: " + logAudit.Detail);
 
+            var traceDetail = File.Exists(options.DiagnosticsPath)
+                ? $"Lokaler Ramp-Trace: {options.DiagnosticsPath}"
+                : "Lokaler Ramp-Trace noch nicht erstellt (Preflight vor dem Lauf blockiert).";
             var combinedDetail =
                 result.Detail + Environment.NewLine + Environment.NewLine +
+                traceDetail + Environment.NewLine +
                 logAudit.Detail +
                 (logAudit.Clean
                     ? " · PLAYER-LOAD LOGS CLEAN"
