@@ -68,6 +68,39 @@ public sealed class FiestaLoadRampCoordinator
             return FiestaLoadRampResult.CreateBlocked(
                 $"Für den isolierten Lasttest muss die Zone leer sein; aktuell {baselinePlayers:N0} Player.");
 
+        // A local, credential-free trace is useful when the stock NA2016 services log no failure.
+        // A bounded progress filter avoids writing per-client heartbeat traffic during long holds.
+        if (!string.IsNullOrWhiteSpace(options.DiagnosticsPath))
+        {
+            var traceFolder = Path.GetDirectoryName(Path.GetFullPath(options.DiagnosticsPath));
+            if (!string.IsNullOrWhiteSpace(traceFolder))
+                Directory.CreateDirectory(traceFolder);
+        }
+        using var diagnostics = string.IsNullOrWhiteSpace(options.DiagnosticsPath)
+            ? null
+            : new StreamWriter(options.DiagnosticsPath, false, new UTF8Encoding(false)) { AutoFlush = true };
+        var diagnosticLock = new object();
+        var diagnosticsClosed = false;
+        void Trace(string phase, string detail)
+        {
+            if (diagnostics is null)
+                return;
+            lock (diagnosticLock)
+            {
+                if (diagnosticsClosed)
+                    return;
+                try
+                {
+                    var safeDetail = detail.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
+                    diagnostics.WriteLine($"{DateTimeOffset.UtcNow:O}\t{phase}\t{safeDetail}");
+                }
+                catch (IOException)
+                {
+                    // Diagnostic output must not alter the live admission/capacity verdict.
+                }
+            }
+        }
+
         var ready = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var failed = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var lastZoneHeartbeatRoundTrip = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
@@ -76,6 +109,10 @@ public sealed class FiestaLoadRampCoordinator
         var stageResults = new List<FiestaLoadRampStageResult>(targets.Length);
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
+        Trace("BASELINE",
+            $"ZonePlayer={baselinePlayers}; PoolLimit={baseline.Pools.PlayerLimit}; " +
+            $"Listener={listener.MaxAccept}; StageTargets={string.Join(",", targets)}; " +
+            $"StartIntervalMs={options.ClientStartInterval.TotalMilliseconds:N0}; HoldSec={options.SessionHoldDuration.TotalSeconds:N0}");
         progress?.Invoke(new FiestaLoadRampProgress(
             "BASELINE",
             0,
@@ -102,6 +139,7 @@ public sealed class FiestaLoadRampCoordinator
                 if (toStart <= 0)
                     continue;
 
+                Trace("STAGE-START", $"Target={target}; Ready={ready.Count}; AdditionalClients={toStart}");
                 progress?.Invoke(new FiestaLoadRampProgress(
                     "STARTING",
                     target,
@@ -123,6 +161,17 @@ public sealed class FiestaLoadRampCoordinator
                         p =>
                         {
                             lastClientProgress[p.Username] = p;
+
+                            if (p.Failed
+                                || p.Stage is FiestaLoadClientStage.WorldConnected
+                                    or FiestaLoadClientStage.ZoneRedirectReceived
+                                    or FiestaLoadClientStage.ZoneConnected
+                                    or FiestaLoadClientStage.ZoneAuthenticated
+                                    or FiestaLoadClientStage.ClientReady)
+                            {
+                                Trace(p.Failed ? "CLIENT-FAIL" : p.Stage.ToString().ToUpperInvariant(),
+                                    $"{p.Username}/{p.CharacterName}: {p.Detail}");
+                            }
 
                             if (p.Failed)
                             {
@@ -274,6 +323,9 @@ public sealed class FiestaLoadRampCoordinator
                     && actualPlayers == expectedPlayers
                     && exactSamples >= 2;
 
+                Trace(stagePassed ? "STAGE-PASS" : "STAGE-FAIL",
+                    $"Target={target}; Ready={ready.Count}; ExpectedShinePlayer={expectedPlayers}; " +
+                    $"ActualShinePlayer={actualPlayers}; ExactSamples={exactSamples}; Samples={verificationSamples}");
                 stageResults.Add(new FiestaLoadRampStageResult
                 {
                     TargetClients = target,
@@ -370,6 +422,7 @@ public sealed class FiestaLoadRampCoordinator
                 }
             }
 
+            Trace("RAMP-PASS", $"FinalReady={ready.Count}; Target={finalTarget}; Stages={stageResults.Count}");
             return new FiestaLoadRampResult
             {
                 Passed = true,
@@ -404,6 +457,9 @@ public sealed class FiestaLoadRampCoordinator
                 try { await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(15)); }
                 catch { }
             }
+            Trace("RAMP-END", $"FinalReady={ready.Count}; Failed={failed.Count}; PassedStages={stageResults.Count(x => x.Passed)}");
+            lock (diagnosticLock)
+                diagnosticsClosed = true;
         }
     }
 
@@ -552,6 +608,7 @@ public sealed class FiestaLoadRampOptions
 
     public string TargetZoneExePath { get; init; } = string.Empty;
     public string CredentialManifestPath { get; init; } = string.Empty;
+    public string DiagnosticsPath { get; init; } = string.Empty;
     public FiestaHeadlessProbeOptions ClientOptions { get; init; } = new();
     public IReadOnlyList<int> StageTargets { get; init; } = DiagnosticStageTargets;
     public bool RequireEmptyBaseline { get; init; } = true;
