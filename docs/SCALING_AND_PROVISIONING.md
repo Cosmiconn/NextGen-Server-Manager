@@ -89,3 +89,55 @@ Zusätzlich misst der Scaling-Tab den WorldManager separat:
 - Private Memory
 
 Der 100er Wert ist weiterhin **ein Socket-Session-Limit und kein Beweis für maximal 100 Zone-IDs**. Mehrere S2S-Sessions pro Zone sind möglich. Eine zusätzliche Zone kann außerdem den WorldManager stärker belasten statt ihn zu entlasten; deshalb wird die WM-Kapazität getrennt bewertet.
+
+
+## NA2016 Headless-ShinePlayer-Benchmark (Messstand 2026-10-10)
+
+Dieser Abschnitt dokumentiert die **gesonderte, streng nachgewiesene 2000er-Testprofil-Runtime**
+auf dem Forschungsbranch `research/client-load-simulator`. Er ersetzt **nicht** die
+oben dokumentierten konservativen Standard-/Baselinewerte. Die aktuellen Limits
+werden vor jedem Test aus dem *laufenden* Zielprozess plus verifiziertem Listener gelesen.
+
+- Die serielle Identitätsvorprovisionierung hat 1600/1600 Accounts und Charaktere
+  inklusive `SH3/20` und `SH4/3` verifiziert. Diese Phase hält keine 1600 Sitzungen.
+- Im Ramp-B-Test werden alle Sitzungen gehalten und die Zone muss in jeder Stufe
+  zwei aufeinanderfolgende **exakte** `ShinePlayer`-Runtime-Zähler liefern.
+- Trace `player-ramp-trace-20261010-105407-012.log`: normale Reihenfolge,
+  2-s-Starttakt, Stufen bis einschließlich **800 PASS**.
+  Bei Stufe 900: **899 ClientReady und 899 ShinePlayer**, Account `r_ngl000806`
+  nach vier vollständigen Zone-Handoffs **vor SH6/2** getrennt.
+- Trace `player-ramp-trace-20261010-112917-438.log`: diagnostische Reihenfolge
+  (Account 515 zuerst), 2-s-Starttakt, Stufen bis einschließlich **700 PASS**.
+  Bei Stufe 800: **798 ClientReady und 798 ShinePlayer**, Accounts
+  `r_ngl000750`/`r_ngl000787` nach vier Zone-Handoffs vor `SH6/2` getrennt.
+- Die identischen Accounts `750` und `787` waren in der normalen Reihenfolge
+  erfolgreich. Somit ist bislang weder ein statisches Accountproblem noch ein hartes
+  800-/900-Spieler-Poollimit nachgewiesen. Der Abbruch nach
+  `CH6/1`, Initialisierungspaketen und vor `SH6/2` bleibt offen.
+- Der zweite Lauf hatte einen **LOG DELTA REVIEW** wegen
+  `WorldManager.Session::wms_NC_KQ_W2Z_MAKED_CMD: Buffer full[0]`
+  (`Zone00Assert`, Meldungszeit 13:00:00 Serverzeit).
+  Das ist **kein CLEAN-Gesamtserveraudit**, aber eine unmittelbare Kausalität zum
+  späteren Zone-Login-Abbruch ist nicht belegt.
+- Der Nachweis umfasst gleichzeitige Sitzungsaufnahme und passive
+  Protokoll-Halteverbindungen, noch **keine** 1600 gleichzeitig aktiv kämpfenden Spieler.
+  Der finale 5-Minuten-Stabilitätsnachweis bei 1600 steht weiterhin aus.
+
+### Kontrollierte Diagnose statt stiller Erfolgsaufwertung
+
+Die Ramp-UI bietet `Starttakt (s)` (1..3), `B: zuerst #` (0=Standard) und
+`B: Nachaufnahme` (0=Baseline, 1=Diagnose). Die **optionale**, standardmäßig
+deaktivierte Nachaufnahme greift nur nach vier transienten
+`CH6/1 -> SH6/2`-Socketabbrüchen ein, wartet 20 Sekunden und beginnt
+mit exakt demselben Account einen einzigen zusätzlichen vollständigen
+`Login -> World -> Zone`-Zyklus. Explizite Server-Ablehnungen werden dabei
+**nicht** übergangen.
+
+Die Nachaufnahme ist in Trace und Ergebnis als **DIAGNOSE** sichtbar.
+Sie beweist keine saubere Erstaufnahme: Jede Stufe muss trotzdem alle
+ursprünglichen eindeutigen Identitäten gleichzeitig `ClientReady` halten,
+und `ShinePlayer` muss unverändert zweimal exakt der Zielstufe entsprechen.
+Wird die Nachaufnahme ebenfalls abgewiesen, bleibt die Stufe **BLOCKED**.
+
+Für einen abschließenden Kapazitätsvergleich Nachaufnahme wieder auf `0`
+setzen und sämtliche Log-Audit-REVIEW-Befunde gesondert abklären.
