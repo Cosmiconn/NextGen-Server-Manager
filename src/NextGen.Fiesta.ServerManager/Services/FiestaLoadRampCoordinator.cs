@@ -112,6 +112,7 @@ public sealed class FiestaLoadRampCoordinator
         var failed = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var lastZoneHeartbeatRoundTrip = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         var lastClientProgress = new ConcurrentDictionary<string, FiestaHeadlessClientProgress>(StringComparer.OrdinalIgnoreCase);
+        var deferredZoneAdmissions = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var tasks = new List<Task<FiestaHeadlessProbeResult>>(finalTarget);
         var stageResults = new List<FiestaLoadRampStageResult>(targets.Length);
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -119,7 +120,8 @@ public sealed class FiestaLoadRampCoordinator
         Trace("BASELINE",
             $"CredentialStartIndex={options.CredentialStartIndex}; PriorityCredentialNumber={options.PriorityCredentialNumber}; " +
             $"ZonePlayer={baselinePlayers}; PoolLimit={baseline.Pools.PlayerLimit}; " +
-            $"Listener={listener.MaxAccept}; StageTargets={string.Join(",", targets)}; " +
+            $"Listener={listener.MaxAccept}; DelayedZoneReentryAttempts={options.ClientOptions.DelayedZoneReentryAttempts}; " +
+            $"StageTargets={string.Join(",", targets)}; " +
             $"StartIntervalMs={options.ClientStartInterval.TotalMilliseconds:N0}; HoldSec={options.SessionHoldDuration.TotalSeconds:N0}");
         progress?.Invoke(new FiestaLoadRampProgress(
             "BASELINE",
@@ -176,6 +178,8 @@ public sealed class FiestaLoadRampCoordinator
                                 return;
 
                             lastClientProgress[p.Username] = p;
+                            if (p.Detail.StartsWith("RAMP_ZONE_REENTRY_RETRY", StringComparison.Ordinal))
+                                deferredZoneAdmissions.TryAdd(p.Username, 0);
 
                             if (p.Failed
                                 || p.Detail.StartsWith("RAMP_LOGIN_RETRY", StringComparison.Ordinal)
@@ -193,7 +197,9 @@ public sealed class FiestaLoadRampCoordinator
                                     ? "CLIENT-FAIL"
                                     : p.Detail.StartsWith("RAMP_LOGIN_RETRY", StringComparison.Ordinal)
                                         ? "LOGIN-RETRY"
-                                        : p.Stage.ToString().ToUpperInvariant();
+                                        : p.Detail.StartsWith("RAMP_ZONE_REENTRY_RETRY", StringComparison.Ordinal)
+                                            ? "ZONE-DEFERRED-REENTRY"
+                                            : p.Stage.ToString().ToUpperInvariant();
                                 Trace(phase, $"{p.Username}/{p.CharacterName}: " +
                                     $"Stage={p.Stage}; {p.Detail}");
                             }
@@ -350,7 +356,8 @@ public sealed class FiestaLoadRampCoordinator
 
                 Trace(stagePassed ? "STAGE-PASS" : "STAGE-FAIL",
                     $"Target={target}; Ready={ready.Count}; ExpectedShinePlayer={expectedPlayers}; " +
-                    $"ActualShinePlayer={actualPlayers}; ExactSamples={exactSamples}; Samples={verificationSamples}");
+                    $"ActualShinePlayer={actualPlayers}; ExactSamples={exactSamples}; Samples={verificationSamples}; " +
+                    $"DeferredZoneReentries={deferredZoneAdmissions.Count}");
                 stageResults.Add(new FiestaLoadRampStageResult
                 {
                     TargetClients = target,
@@ -361,7 +368,9 @@ public sealed class FiestaLoadRampCoordinator
                     Passed = stagePassed,
                     TimestampUtc = DateTimeOffset.UtcNow,
                     Detail = stagePassed
-                        ? $"PASS: {target:N0} Simulatoren ready, ShinePlayer {actualPlayers:N0}/{observation.Pools.PlayerLimit:N0} · {exactSamples} exakte Samples."
+                        ? $"PASS: {target:N0} Simulatoren ready, ShinePlayer {actualPlayers:N0}/{observation.Pools.PlayerLimit:N0} · {exactSamples} exakte Samples." +
+                          (deferredZoneAdmissions.IsEmpty ? "" :
+                              $" DIAGNOSE: {deferredZoneAdmissions.Count:N0} Identität(en) benötigten eine verzögerte vollständige Zone-Nachaufnahme.")
                         : $"FAIL: Simulatoren ready={ready.Count:N0}; ShinePlayer erwartet {expectedPlayers:N0}, gemessen {actualPlayers:N0} nach {verificationSamples} Verifikations-Samples. " +
                           BuildHeartbeatMismatchDetail(
                               ready,
@@ -447,7 +456,10 @@ public sealed class FiestaLoadRampCoordinator
                 }
             }
 
-            Trace("RAMP-PASS", $"FinalReady={ready.Count}; Target={finalTarget}; Stages={stageResults.Count}");
+            Trace("RAMP-PASS",
+                $"FinalReady={ready.Count}; Target={finalTarget}; Stages={stageResults.Count}; " +
+                $"DeferredZoneReentries={deferredZoneAdmissions.Count}; " +
+                $"DiagnosticMode={options.ClientOptions.DelayedZoneReentryAttempts > 0}");
             return new FiestaLoadRampResult
             {
                 Passed = true,
@@ -459,7 +471,10 @@ public sealed class FiestaLoadRampCoordinator
                 Detail =
                     $"LOAD RAMP PASS · {finalTarget:N0} echte Headless-Sessions · " +
                     $"ShinePlayer {baselinePlayers + finalTarget:N0}/{ZonePoolOfflineWriterSelfTest.PlayerTarget:N0} · " +
-                    $"{stageResults.Count} Laststufen serverseitig verifiziert."
+                    $"{stageResults.Count} Laststufen serverseitig verifiziert." +
+                    (deferredZoneAdmissions.IsEmpty ? "" :
+                        $" DIAGNOSE: {deferredZoneAdmissions.Count:N0} Zone-Nachaufnahmen; " +
+                        "dieser Lauf war kein sauberer Erstaufnahme-Baseline-Test.")
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -640,6 +655,7 @@ public sealed class FiestaLoadRampCoordinator
             AllowEmulatorSizedZoneTransfer = false,
             StepTimeout = source.StepTimeout,
             ZoneLoginTimeout = source.ZoneLoginTimeout,
+            DelayedZoneReentryAttempts = source.DelayedZoneReentryAttempts,
             HoldDuration = holdDuration
         };
 }
