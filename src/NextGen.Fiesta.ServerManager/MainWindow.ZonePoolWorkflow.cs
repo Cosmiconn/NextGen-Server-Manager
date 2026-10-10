@@ -31,6 +31,7 @@ public partial class MainWindow
     private TextBox? _zoneLoadIdentityCountBox;
     private TextBox? _zoneLoadIdentityPrefixBox;
     private TextBox? _zoneLoadStartIntervalBox;
+    private TextBox? _zoneLoadSingleIdentityBox;
     private TextBox? _zoneLoadLoginHostBox;
     private TextBox? _zoneLoadLoginPortBox;
     private TextBox? _zoneLoadWorldIdBox;
@@ -403,6 +404,17 @@ public partial class MainWindow
         var actionRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
         actionRow.Children.Add(CreateZonePoolButton("A · 1 Client + ShinePlayer beweisen", true,
             () => RunPlayerLoadRampUiAsync(singleClientOnly: true)));
+        actionRow.Children.Add(new TextBlock
+        {
+            Text = "A-Identität #",
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 4, 0),
+            ToolTip = "Gezielter Einzeltest eines bestehenden Accounts aus dem Credential-Manifest (z. B. 515)"
+        });
+        _zoneLoadSingleIdentityBox = CreateZoneLoadTextBox(
+            55, "Bestehender Credential-Index 1..1600 (z. B. 515); Ramp B unverändert", "1");
+        actionRow.Children.Add(_zoneLoadSingleIdentityBox);
         actionRow.Children.Add(CreateZonePoolButton("B · Ramp 1 → 1600", false,
             () => RunPlayerLoadRampUiAsync(singleClientOnly: false)));
         actionRow.Children.Add(new TextBlock
@@ -855,6 +867,9 @@ public partial class MainWindow
             var startIntervalSeconds = singleClientOnly
                 ? 0
                 : ParseZoneLoadInt(_zoneLoadStartIntervalBox, "Starttakt in Sekunden", 1, 3);
+            var selectedIdentityNumber = singleClientOnly
+                ? ParseZoneLoadInt(_zoneLoadSingleIdentityBox, "A-Identität", 1, credentialManifest.Clients.Count)
+                : 1;
             // Preserve the previously validated two-hour hold budget while extending it
             // for the extra wall time incurred by deliberate 2s/3s admission pacing.
             var holdDuration = singleClientOnly
@@ -865,6 +880,7 @@ public partial class MainWindow
             {
                 TargetZoneExePath = target,
                 CredentialManifestPath = credentials,
+                CredentialStartIndex = selectedIdentityNumber - 1,
                 DiagnosticsPath = Path.Combine(GetZonePoolWorkDirectory(),
                     $"player-ramp-trace-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}.log"),
                 ClientOptions = new FiestaHeadlessProbeOptions
@@ -908,7 +924,7 @@ public partial class MainWindow
             _zonePoolCheckpointPath = loadLogCheckpoint;
 
             SetZoneLoadStatus(singleClientOnly
-                ? "1-Client-Probe läuft 5 Minuten: Login → World → Zone → ShinePlayer + Log-Audit …"
+                ? $"1-Client-Probe für Credential #{selectedIdentityNumber} ({credentialManifest.Clients[selectedIdentityNumber - 1].Username}) läuft: Login → World → Zone → ShinePlayer + Log-Audit …"
                 : $"Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · {startIntervalSeconds}-s Starttakt · 3-min Ready-Budget je Stufe · Zone-Handoff hat bounded Retry nur vor SH6/2 · Holding folgt dem echten Capture: Zone sendet SH2/4 (~30-s-Takt), Client antwortet CH2/5; kein aktives CH2/4 · 5-Min-Stabilität + Log-Audit …");
 
             var result = await new FiestaLoadRampCoordinator().RunAsync(
