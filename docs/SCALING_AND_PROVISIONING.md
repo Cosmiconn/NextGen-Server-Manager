@@ -197,3 +197,61 @@ Als getrennte Variable optional `Starttakt = 3 s` testen; bei
 Vergleichbarkeit zunächst 2 s beibehalten. Vor jedem definitiven
 Kapazitäts-Attest den Modus wieder auf 0 zurücksetzen und die Zone-
 Logs ohne ungelöste echte Warn-/Fehlereinträge prüfen.
+
+
+### NA2016: 1600 gleichzeitige Zone00-Sitzungen – erster vollständiger PASS (2026-10-11)
+
+Quelle: vom Betreiber gesicherter lokaler Original-Trace
+`player-ramp-trace-20261010-221643-056.log` (UTC-Laufzeit
+2026-10-10 22:16:44 bis 23:20:18, ca. 63 min 34 s).
+Der Original-Trace ist **nicht** allein durch diese Zusammenfassung ersetzt;
+zur Reproduktion die hochgeladene vollständige Datei aufbewahren.
+
+**Konfiguration:** `CredentialStartIndex=0`,
+`PriorityCredentialNumber=0` (originale Manifest-Reihenfolge),
+`ZonePlayer=0`, `PoolLimit=2000`, `Listener=2000`,
+`StartIntervalMs=2000`, `DelayedZoneReentryAttempts=1`,
+`SessionHoldDuration=8800s`.
+
+**Bestätigte Messergebnisse:**
+- Alle **26/26** Laststufen vom ersten Spieler bis **1600 PASS**.
+  Jede Stufe meldet `Ready=Target`,
+  `ExpectedShinePlayer=ActualShinePlayer=Target`,
+  `ExactSamples=2`.
+- Die **1600er-Stufe** erreichte `STAGE-PASS` um
+  **23:15:18 UTC** mit `Ready=1600` und `ShinePlayer=1600`.
+  Das anschließende `RAMP-PASS` erschien um **23:20:18 UTC**.
+  Die finale Stabilitätsphase prüft im aktuellen Coordinator
+  alle 5 Sekunden erneut auf echten Runtime-Zählergleichstand,
+  Verbindungsverlust und Observer-Fehler.
+- `RAMP-SHUTDOWN-SNAPSHOT`: `ReadyBeforeCleanup=1600`,
+  `RealFailuresBeforeCleanup=0`, `VerifiedStages=26`.
+- **1559** Identitäten erreichten `SH6/2` beim ersten Zone-Versuch,
+  **20** beim zweiten, **12** beim dritten, **9** beim vierten.
+  **41** verschiedene Identitäten benötigten insgesamt
+  **71 normale Zone-Handoff-Retries**. Der erste solcher Retry
+  betraf `r_ngl000911`; für Identitäten 1–800 war keiner nötig.
+  Zusätzlich wurden **2 begrenzte transiente Login-Retries**
+  protokolliert.
+- Trotz aktivem *Diagnose-Flag* hat der verzögerte
+  20-Sekunden-Neueinstieg **kein einziges Mal gegriffen**:
+  `DeferredZoneReentries=0` an jeder Stufe und in
+  `RAMP-PASS`. Der Erfolg ist somit **nicht** von der
+  zusätzlichen verzögerten Nachaufnahme abhängig.
+  Normale Login-/Zone-Retries waren dennoch aktiv:
+  **nicht** als 1600 fehlerfreie Erstversuche darstellen.
+
+**Offene Qualifikationen:**
+- Der zugehörige GUI-Log-Audit meldet weiterhin
+  `LOG DELTA REVIEW` für
+  `WorldManagerSession::wms_NC_KQ_W2Z_MAKED_CMD : Buffer full[0]`.
+  Das ist **kein CLEAN-Gesamtserveraudit**. Den KQ-Befund
+  unabhängig von dem erfolgreichen Kapazitätsnachweis bearbeiten.
+- Der Nachweis umfasst 1600 gleichzeitig gehaltene
+  originale Login-/World-/Zone-Protokollsitzungen und den
+  serverseitigen `ShinePlayer`-Runtime-Zähler, **keine**
+  1600 Spieler, die zeitgleich laufen, kämpfen oder Skills nutzen.
+- Ein zweiter Vergleichslauf mit unverändertem Starttakt,
+  `PriorityCredentialNumber=0` und
+  `DelayedZoneReentryAttempts=0` ist angekündigt.
+  Sein Ergebnis **nicht vorab** als PASS behandeln.
