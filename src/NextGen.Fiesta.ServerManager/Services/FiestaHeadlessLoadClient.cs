@@ -90,7 +90,10 @@ public sealed class FiestaHeadlessLoadClient
     }
 
     private static bool IsDelayedZoneAdmissionFailure(FiestaLoadClientStage stage, string detail)
-        => stage == FiestaLoadClientStage.ZoneConnected
+        // ZoneRedirectReceived can be the last reported stage if the fourth candidate's
+        // TCP/XOR handshake closes before SetStage(ZoneConnected). The exception still
+        // describes a full 4/4 pre-SH6/2 transient Zone admission sequence.
+        => (stage is FiestaLoadClientStage.ZoneConnected or FiestaLoadClientStage.ZoneRedirectReceived)
            && detail.Contains("Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4", StringComparison.Ordinal)
            && detail.Contains("EndOfStreamException", StringComparison.Ordinal)
            && !detail.Contains("SH3/9 Error", StringComparison.Ordinal)
@@ -765,12 +768,27 @@ public sealed class FiestaHeadlessLoadClient
                     "Ramp-Login-Transport-Retries müssen begrenzt sein und dürfen keine explizite World-Ablehnung verdecken.");
             }
 
-            if (!IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneConnected,
-                    "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. Verlauf: IOException · EndOfStreamException")
-                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.WorldConnected,
-                    "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. Verlauf: IOException · EndOfStreamException")
-                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneConnected,
+            const string transientZoneAdmissionFailure =
+                "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. Verlauf: " +
+                "Versuch 1: IOException · EndOfStreamException | " +
+                "Versuch 2: IOException · EndOfStreamException | " +
+                "Versuch 3: IOException · EndOfStreamException | " +
+                "Versuch 4: EndOfStreamException · Fiesta-Verbindung wurde vom Server geschlossen.";
+            if (!IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneConnected, transientZoneAdmissionFailure)
+                // Regression from the 1,200 PASS / 1,297 Ready trace on 2026-10-10:
+                // NGL001208 was still at ZoneRedirectReceived when the fourth pre-ACK
+                // socket terminated, which previously bypassed the opt-in deferred re-entry.
+                || !IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneRedirectReceived, transientZoneAdmissionFailure)
+                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.WorldConnected, transientZoneAdmissionFailure)
+                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.LoginAuthenticated, transientZoneAdmissionFailure)
+                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneRedirectReceived,
+                    "Zone-Handoff scheiterte vor SH6/2 bei Versuch 3/4. EndOfStreamException")
+                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneRedirectReceived,
                     "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. SH4/2 ConnectError · EndOfStreamException")
+                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneConnected,
+                    "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. SH3/9 Error · EndOfStreamException")
+                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneRedirectReceived,
+                    "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. SH5/4 · EndOfStreamException")
                 || new FiestaHeadlessProbeOptions().DelayedZoneReentryAttempts != 0)
             {
                 throw new InvalidDataException(
