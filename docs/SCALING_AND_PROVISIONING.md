@@ -141,3 +141,59 @@ Wird die Nachaufnahme ebenfalls abgewiesen, bleibt die Stufe **BLOCKED**.
 
 Für einen abschließenden Kapazitätsvergleich Nachaufnahme wieder auf `0`
 setzen und sämtliche Log-Audit-REVIEW-Befunde gesondert abklären.
+
+### Weitere Live-Evidenz: 1200 PASS, 1297 Ready (2026-10-10, späterer Lauf)
+
+Trace: `player-ramp-trace-20261010-145026-833.log`, reguläre
+Accountreihenfolge, Starttakt 2 s, `DelayedZoneReentryAttempts=1`.
+Laufzeit etwa 16:50:27 bis 17:37:34 deutsche Sommerzeit.
+
+- **19 aufeinanderfolgende Stufen bis einschließlich 1200 PASS**:
+  jeweils genau zwei aufeinanderfolgende Runtime-Samples mit
+  `ActualShinePlayer=ExpectedShinePlayer=Ready`.
+- 1300er-Stufe nicht bestanden: bei Abbruch `Ready=1297`, genau
+  ein dauerhafter fehlgeschlagener Client `r_ngl001208` und
+  `ShinePlayer=1298` bei `PoolLimit=2000`.
+  Der zusätzliche serverseitige Eintrag kann eine bereits intern angelegte
+  *noch nicht ClientReady bestätigte* In-Flight-Session sein.
+  Er ist **kein** 1298er-PASS-Beweis.
+- Der Diagnosemodus half: `r_ngl001078` (ab 1100er Stufe),
+  `r_ngl001237` und `r_ngl001245` erreichten nach verzögerter
+  Neuaufnahme schließlich `CH6/3` und `ClientReady`.
+  Damit ist 1200 ein erfolgreicher **Diagnose-Ramp**, noch kein
+  kanonischer 1200er-Erstaufnahme-Baseline-Lauf.
+- Der vierte Zone-Versuch von `r_ngl001208` endete vor `SH6/2`
+  schon mit `EndOfStreamException` in `ConnectAsync`. Letzter
+  gemeldeter Clientzustand war deshalb `ZoneRedirectReceived`,
+  während die ursprüngliche Diagnose-Nachaufnahme ausschließlich
+  `ZoneConnected` akzeptierte. Dies wurde korrigiert, ohne die
+  `SH6/2`/`CH6/3`- und Runtime-PASS-Kriterien zu verändern.
+- Die Zone-Transportabbrüche starten ab ca. 17:23:37 bei ~900 Spielern.
+  Trace: 135 explizite transiente Zone-Retry-Ereignisse.
+  `Assert2026101017.txt`: 138
+  `ShinePlayer::so_Disconnect[1669]` und 138
+  `Socket cut not for player[0]`.
+  `CoordRepairLog2026101017.txt`: exakt 138 `TSStart`-Zeilen
+  mit **identischen Zeitstempeln** zu den 138 Disconnect-Ereignissen.
+  Alle Disconnect-Zeitpunkte fallen bis auf höchstens 2 s mit Zone-
+  Transportabbrüchen im Trace zusammen. Das ist starke Korrelation,
+  aber noch keine gesicherte Primärursache des Disconnects.
+- Das Assert-Log enthält daneben 20 regelmäßige
+  `WorldManagerSession::wms_NC_KQ_W2Z_MAKED_CMD : Buffer full[0]`
+  von 17:00:00 bis 17:20:00 und 421
+  `[TS-Debug TS_Wegweiser.lua ...]`-Meldungen.
+  Der KQ-Befund tritt somit **vor** dem ersten hier gemessenen
+  Login-Abbruch auf. Er darf weder ignoriert noch ohne
+  weiteren Nachweis als Ursache bezeichnet werden.
+- Aktuelle Forschungsfrage: Ist die Aufnahmeinstabilität durch eine
+  Zone-/World-Session-Aufräum-Race-Condition, die Spawn-/CoordRepair-
+  Behandlung oder einen lastabhängigen Initialisierungspfad bedingt?
+  Keine pauschalen Hardlimit-Erhöhungen, Binary-Änderungen oder
+  stillen Retry-Freigaben ohne reproduzierbaren Beleg.
+
+Für den nächsten Diagnoselauf nach der Klassifikationskorrektur
+`B: zuerst # = 0`, `B: Nachaufnahme = 1` und isolierte leere Zone.
+Als getrennte Variable optional `Starttakt = 3 s` testen; bei
+Vergleichbarkeit zunächst 2 s beibehalten. Vor jedem definitiven
+Kapazitäts-Attest den Modus wieder auf 0 zurücksetzen und die Zone-
+Logs ohne ungelöste echte Warn-/Fehlereinträge prüfen.
