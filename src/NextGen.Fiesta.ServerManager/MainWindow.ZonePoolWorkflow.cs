@@ -32,6 +32,7 @@ public partial class MainWindow
     private TextBox? _zoneLoadIdentityPrefixBox;
     private TextBox? _zoneLoadStartIntervalBox;
     private TextBox? _zoneLoadSingleIdentityBox;
+    private TextBox? _zoneLoadPriorityIdentityBox;
     private TextBox? _zoneLoadLoginHostBox;
     private TextBox? _zoneLoadLoginPortBox;
     private TextBox? _zoneLoadWorldIdBox;
@@ -428,6 +429,17 @@ public partial class MainWindow
         _zoneLoadStartIntervalBox = CreateZoneLoadTextBox(
             44, "Rampe B: 1..3 Sekunden zwischen Client-Starts (1 = bisherige Baseline)", "1");
         actionRow.Children.Add(_zoneLoadStartIntervalBox);
+        actionRow.Children.Add(new TextBlock
+        {
+            Text = "B: zuerst #",
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 4, 0),
+            ToolTip = "0 = unveränderte Reihenfolge; 515 = Account #515 zuerst, die anderen 1599 bleiben erhalten. Nur Diagnosetest!"
+        });
+        _zoneLoadPriorityIdentityBox = CreateZoneLoadTextBox(
+            54, "0 = Standard; 1..1600 = diese Identität zuerst für diagnostische Ramp B", "0");
+        actionRow.Children.Add(_zoneLoadPriorityIdentityBox);
         actionRow.Children.Add(CreateZonePoolButton("Abbrechen", false, async () =>
         {
             _zoneLoadRampCancellation?.Cancel();
@@ -870,6 +882,9 @@ public partial class MainWindow
             var selectedIdentityNumber = singleClientOnly
                 ? ParseZoneLoadInt(_zoneLoadSingleIdentityBox, "A-Identität", 1, credentialManifest.Clients.Count)
                 : 1;
+            var priorityIdentityNumber = singleClientOnly
+                ? 0
+                : ParseZoneLoadInt(_zoneLoadPriorityIdentityBox, "B: zuerst #", 0, credentialManifest.Clients.Count);
             // Preserve the previously validated two-hour hold budget while extending it
             // for the extra wall time incurred by deliberate 2s/3s admission pacing.
             var holdDuration = singleClientOnly
@@ -881,6 +896,7 @@ public partial class MainWindow
                 TargetZoneExePath = target,
                 CredentialManifestPath = credentials,
                 CredentialStartIndex = selectedIdentityNumber - 1,
+                PriorityCredentialNumber = priorityIdentityNumber,
                 DiagnosticsPath = Path.Combine(GetZonePoolWorkDirectory(),
                     $"player-ramp-trace-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}.log"),
                 ClientOptions = new FiestaHeadlessProbeOptions
@@ -925,7 +941,9 @@ public partial class MainWindow
 
             SetZoneLoadStatus(singleClientOnly
                 ? $"1-Client-Probe für Credential #{selectedIdentityNumber} ({credentialManifest.Clients[selectedIdentityNumber - 1].Username}) läuft: Login → World → Zone → ShinePlayer + Log-Audit …"
-                : $"Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · {startIntervalSeconds}-s Starttakt · 3-min Ready-Budget je Stufe · Zone-Handoff hat bounded Retry nur vor SH6/2 · Holding folgt dem echten Capture: Zone sendet SH2/4 (~30-s-Takt), Client antwortet CH2/5; kein aktives CH2/4 · 5-Min-Stabilität + Log-Audit …");
+                : $"Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · " +
+                  $"{(priorityIdentityNumber == 0 ? "Standardreihenfolge" : $"DIAGNOSE-REIHENFOLGE (#{priorityIdentityNumber} zuerst, keine Baseline)")}" +
+                  $" · {startIntervalSeconds}-s Starttakt · 3-min Ready-Budget je Stufe · Zone-Handoff hat bounded Retry nur vor SH6/2 · Holding folgt dem echten Capture: Zone sendet SH2/4 (~30-s-Takt), Client antwortet CH2/5; kein aktives CH2/4 · 5-Min-Stabilität + Log-Audit …");
 
             var result = await new FiestaLoadRampCoordinator().RunAsync(
                 options,
