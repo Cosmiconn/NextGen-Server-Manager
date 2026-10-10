@@ -498,8 +498,18 @@ public sealed class FiestaLoadRampCoordinator
                 try
                 {
                     var onFailure = _runtimeObserver.Observe(options.TargetZoneExePath, minimumUptimeSeconds: 0);
+                    // A Zone can already allocate ShinePlayer for an in-flight CH6/1
+                    // while our client still waits for the authoritative SH6/2/CH6/3
+                    // pair. Report this explicitly; it is NOT a PASS without ClientReady.
+                    var notYetReady = Math.Max(0, tasks.Count - ready.Count - failed.Count);
+                    var serverMinusReady = onFailure.Pools is null
+                        ? "<unavailable>"
+                        : (onFailure.Pools.PlayerCount - baselinePlayers - ready.Count).ToString(
+                            System.Globalization.CultureInfo.InvariantCulture);
                     Trace("FAIL-LIVE-ZONE",
                         $"Ready={ready.Count}; Failed={failed.Count}; " +
+                        $"Started={tasks.Count}; StartedNeitherReadyNorFailed={notYetReady}; " +
+                        $"ServerMinusReady={serverMinusReady}; " +
                         $"ShinePlayer={(onFailure.Pools is null ? "<unavailable>" : onFailure.Pools.PlayerCount.ToString())}; " +
                         $"PoolLimit={(onFailure.Pools is null ? "<unavailable>" : onFailure.Pools.PlayerLimit.ToString())}; " +
                         $"ObserverPassed={onFailure.Passed}; Detail={onFailure.Detail}");
