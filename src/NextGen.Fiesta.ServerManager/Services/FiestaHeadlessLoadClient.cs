@@ -20,11 +20,88 @@ public sealed class FiestaHeadlessLoadClient
     private const int ProvisionLoginMaxAttempts = 5;
     private const int RampLoginMaxAttempts = 4;
 
+    // Optional diagnostic rescue AFTER the usual 4 complete Zone transfers have failed.
+    // A deferred re-entry always starts a NEW Login -> World -> Zone cycle, with the
+    // original credential. No failed client is counted Ready until CH6/3 is sent.
+    // Disabled by default to keep canonical ramp results directly comparable.
     public async Task<FiestaHeadlessProbeResult> ProbeAndHoldAsync(
         FiestaHeadlessProbeOptions options,
         FiestaLoadClientCredential credential,
         CancellationToken cancellationToken = default,
         Action<FiestaHeadlessClientProgress>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(credential);
+        options.Validate();
+        credential.Validate();
+        if (options.DelayedZoneReentryAttempts == 0)
+            return await ProbeAndHoldCycleAsync(options, credential, cancellationToken, progress);
+
+        for (var cycle = 0; cycle <= options.DelayedZoneReentryAttempts; cycle++)
+        {
+            FiestaHeadlessClientProgress? pendingFailure = null;
+            var result = await ProbeAndHoldCycleAsync(
+                options, credential, cancellationToken,
+                p =>
+                {
+                    if (p.Failed && IsDelayedZoneAdmissionFailure(p.Stage, p.Detail))
+                        pendingFailure = p;
+                    else
+                        progress?.Invoke(p);
+                });
+
+            if (!IsDelayedZoneAdmissionFailure(result.Stage, result.Detail)
+                || result.Success || result.Cancelled || cancellationToken.IsCancellationRequested
+                || cycle >= options.DelayedZoneReentryAttempts)
+            {
+                if (pendingFailure is { } finalFailure)
+                    progress?.Invoke(finalFailure);
+                return result;
+            }
+
+            // The protocol-level admission failure is retained in diagnostic progress
+            // as an anomaly. The stage still requires 100% real successful sessions.
+            var delay = TimeSpan.FromSeconds(20 + cycle * 10);
+            progress?.Invoke(new FiestaHeadlessClientProgress(
+                credential.Username, credential.CharacterName,
+                FiestaLoadClientStage.ZoneConnected,
+                $"RAMP_ZONE_REENTRY_RETRY · 4/4 Zone-Abbrüche vor SH6/2 · " +
+                $"zusätzlicher kompletter Login→World→Zone-Versuch {cycle + 1}/" +
+                $"{options.DelayedZoneReentryAttempts} nach {delay.TotalSeconds:N0}s. " +
+                "Diagnosemodus, kein sauberer Erstlogin.",
+                DateTimeOffset.UtcNow));
+            try
+            {
+                await Task.Delay(delay, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return new FiestaHeadlessProbeResult
+                {
+                    Success = false,
+                    Stage = FiestaLoadClientStage.ZoneConnected,
+                    Cancelled = true,
+                    Detail = "Verzögerter Zone-Reentry durch Abbruch des Ramp-Tests beendet."
+                };
+            }
+        }
+
+        throw new InvalidOperationException("Delayed-Zone-Reentry-Versuche unerwartet beendet.");
+    }
+
+    private static bool IsDelayedZoneAdmissionFailure(FiestaLoadClientStage stage, string detail)
+        => stage == FiestaLoadClientStage.ZoneConnected
+           && detail.Contains("Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4", StringComparison.Ordinal)
+           && detail.Contains("EndOfStreamException", StringComparison.Ordinal)
+           && !detail.Contains("SH3/9 Error", StringComparison.Ordinal)
+           && !detail.Contains("SH4/2 ConnectError", StringComparison.Ordinal)
+           && !detail.Contains("SH5/4", StringComparison.Ordinal);
+
+    private async Task<FiestaHeadlessProbeResult> ProbeAndHoldCycleAsync(
+        FiestaHeadlessProbeOptions options,
+        FiestaLoadClientCredential credential,
+        CancellationToken cancellationToken,
+        Action<FiestaHeadlessClientProgress>? progress)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(credential);
@@ -686,6 +763,18 @@ public sealed class FiestaHeadlessLoadClient
             {
                 throw new InvalidDataException(
                     "Ramp-Login-Transport-Retries müssen begrenzt sein und dürfen keine explizite World-Ablehnung verdecken.");
+            }
+
+            if (!IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneConnected,
+                    "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. Verlauf: IOException · EndOfStreamException")
+                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.WorldConnected,
+                    "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. Verlauf: IOException · EndOfStreamException")
+                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneConnected,
+                    "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. SH4/2 ConnectError · EndOfStreamException")
+                || new FiestaHeadlessProbeOptions().DelayedZoneReentryAttempts != 0)
+            {
+                throw new InvalidDataException(
+                    "Optionale Zone-Nachaufnahme darf explizite Serverfehler nicht wiederholen und ist standardmäßig aus.");
             }
 
             var provisioningLoginRetry1 = GetProvisionLoginRetryDelay("r_ngl000002", 1);
@@ -1915,6 +2004,9 @@ public sealed class FiestaHeadlessProbeOptions
     public TimeSpan StepTimeout { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan ZoneLoginTimeout { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan HoldDuration { get; init; } = TimeSpan.FromMinutes(5);
+    // Diagnostic only: extra FULL client-cycle after four failed Zone logins.
+    // Disabled by default. Never changes the Zone pool's PASS criteria.
+    public int DelayedZoneReentryAttempts { get; init; }
 
     public void Validate()
     {
@@ -1924,6 +2016,8 @@ public sealed class FiestaHeadlessProbeOptions
         if (ClientTag.Length > 8) throw new ArgumentException("ClientTag darf maximal 8 ASCII-Zeichen lang sein.");
         if (StepTimeout <= TimeSpan.Zero || ZoneLoginTimeout <= TimeSpan.Zero) throw new ArgumentException("Timeouts müssen positiv sein.");
         if (HoldDuration < TimeSpan.Zero) throw new ArgumentException("HoldDuration darf nicht negativ sein.");
+        if (DelayedZoneReentryAttempts is < 0 or > 1)
+            throw new ArgumentOutOfRangeException(nameof(DelayedZoneReentryAttempts));
         if (!string.IsNullOrWhiteSpace(ClientCaptureProfilePath) && !File.Exists(ClientCaptureProfilePath))
             throw new FileNotFoundException("Client-Capture-Profil wurde nicht gefunden.", ClientCaptureProfilePath);
         if (!string.IsNullOrWhiteSpace(ZoneTransferTemplatePath) && !File.Exists(ZoneTransferTemplatePath))
