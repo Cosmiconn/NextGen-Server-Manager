@@ -38,13 +38,18 @@ public sealed class FiestaLoadRampCoordinator
             return FiestaLoadRampResult.CreateBlocked(
                 $"Ziel {finalTarget:N0} überschreitet den zertifizierten ShinePlayer-Pool {ZonePoolOfflineWriterSelfTest.PlayerTarget:N0}.");
 
+        if (options.PriorityCredentialNumber > credentials.Clients.Count)
+            return FiestaLoadRampResult.CreateBlocked(
+                $"B-Diagnoseidentität #{options.PriorityCredentialNumber} existiert nicht; " +
+                $"Credential-Manifest enthält {credentials.Clients.Count:N0} Identitäten.");
+
         if (credentials.Clients.Count - options.CredentialStartIndex < finalTarget)
             return FiestaLoadRampResult.CreateBlocked(
                 $"Credential-Manifest enthält {credentials.Clients.Count:N0} eindeutige Clients; " +
                 $"Startindex {options.CredentialStartIndex + 1:N0} und Ziel {finalTarget:N0} passen nicht in das Manifest.");
 
-        if (credentials.Clients.Skip(options.CredentialStartIndex).Take(finalTarget)
-            .Any(x => x.CreateCharacterIfMissing)
+        if (Enumerable.Range(0, finalTarget)
+            .Any(index => credentials.Clients[options.ResolveCredentialIndex(index)].CreateCharacterIfMissing)
             && string.IsNullOrWhiteSpace(options.ClientOptions.CharacterCreateTemplatePath))
         {
             return FiestaLoadRampResult.CreateBlocked(
@@ -112,7 +117,8 @@ public sealed class FiestaLoadRampCoordinator
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         Trace("BASELINE",
-            $"CredentialStartIndex={options.CredentialStartIndex}; ZonePlayer={baselinePlayers}; PoolLimit={baseline.Pools.PlayerLimit}; " +
+            $"CredentialStartIndex={options.CredentialStartIndex}; PriorityCredentialNumber={options.PriorityCredentialNumber}; " +
+            $"ZonePlayer={baselinePlayers}; PoolLimit={baseline.Pools.PlayerLimit}; " +
             $"Listener={listener.MaxAccept}; StageTargets={string.Join(",", targets)}; " +
             $"StartIntervalMs={options.ClientStartInterval.TotalMilliseconds:N0}; HoldSec={options.SessionHoldDuration.TotalSeconds:N0}");
         progress?.Invoke(new FiestaLoadRampProgress(
@@ -152,7 +158,7 @@ public sealed class FiestaLoadRampCoordinator
                 for (var index = started; index < target; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var credential = credentials.Clients[options.CredentialStartIndex + index];
+                    var credential = credentials.Clients[options.ResolveCredentialIndex(index)];
                     var client = new FiestaHeadlessLoadClient();
                     var clientOptions = CloneClientOptions(options.ClientOptions, options.SessionHoldDuration);
 
@@ -652,6 +658,27 @@ public sealed class FiestaLoadRampOptions
     public string CredentialManifestPath { get; init; } = string.Empty;
     // Zero-based identity offset used by the isolated A test. Ramp B always starts at zero.
     public int CredentialStartIndex { get; init; }
+    // 0: canonical order. >0: move one existing identity to the front WITHOUT
+    // creating, skipping, duplicating, or changing the underlying credential manifest.
+    // Used only for a diagnostic Ramp B; must be marked as non-baseline in trace/UI.
+    public int PriorityCredentialNumber { get; init; }
+
+    internal int ResolveCredentialIndex(int launchIndex)
+    {
+        if (launchIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(launchIndex));
+
+        if (PriorityCredentialNumber == 0)
+            return checked(CredentialStartIndex + launchIndex);
+
+        var priorityIndex = PriorityCredentialNumber - 1;
+        return launchIndex == 0
+            ? priorityIndex
+            : launchIndex <= priorityIndex
+                ? launchIndex - 1
+                : launchIndex;
+    }
+
     public string DiagnosticsPath { get; init; } = string.Empty;
     public FiestaHeadlessProbeOptions ClientOptions { get; init; } = new();
     public IReadOnlyList<int> StageTargets { get; init; } = DiagnosticStageTargets;
@@ -683,6 +710,11 @@ public sealed class FiestaLoadRampOptions
             throw new ArgumentException("StageTargets muss positive Werte enthalten.");
         if (CredentialStartIndex < 0)
             throw new ArgumentOutOfRangeException(nameof(CredentialStartIndex));
+        if (PriorityCredentialNumber < 0)
+            throw new ArgumentOutOfRangeException(nameof(PriorityCredentialNumber));
+        if (PriorityCredentialNumber > 0 && CredentialStartIndex != 0)
+            throw new ArgumentException(
+                "Die priorisierte Ramp-B-Identität darf nicht mit einem A-Einzeltest-Startindex kombiniert werden.");
         if (ClientStartInterval < TimeSpan.Zero
             || StageReadyTimeout <= TimeSpan.Zero
             || ReadyPollInterval <= TimeSpan.Zero
@@ -772,6 +804,24 @@ public sealed class FiestaLoadRampOptions
             };
             if (!autoManifest.IsLoginAutoRegistrationCompatible(out _))
                 throw new InvalidDataException("r_-Credential-Manifest wurde fälschlich als inkompatibel abgelehnt.");
+
+            var priorityRamp = new FiestaLoadRampOptions { PriorityCredentialNumber = 515 };
+            var defaultRamp = new FiestaLoadRampOptions();
+            var reordered = Enumerable.Range(0, 1600)
+                .Select(priorityRamp.ResolveCredentialIndex)
+                .ToArray();
+            if (reordered.Length != 1600
+                || reordered.Distinct().Count() != 1600
+                || reordered[0] != 514
+                || reordered[1] != 0
+                || reordered[514] != 513
+                || reordered[515] != 515
+                || defaultRamp.ResolveCredentialIndex(514) != 514)
+            {
+                throw new InvalidDataException(
+                    "Diagnostische Ramp-B-Umordnung muss 515 einmalig zuerst wählen, " +
+                    "alle 1600 Identitäten erhalten und die Standardreihenfolge unverändert lassen.");
+            }
 
             // The probe must select an existing identity from the manifest, not create
             // new login credentials or mutate the 1600-client benchmark ordering.
