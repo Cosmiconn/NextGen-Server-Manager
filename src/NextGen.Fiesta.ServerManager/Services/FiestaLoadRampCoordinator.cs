@@ -38,11 +38,13 @@ public sealed class FiestaLoadRampCoordinator
             return FiestaLoadRampResult.CreateBlocked(
                 $"Ziel {finalTarget:N0} überschreitet den zertifizierten ShinePlayer-Pool {ZonePoolOfflineWriterSelfTest.PlayerTarget:N0}.");
 
-        if (credentials.Clients.Count < finalTarget)
+        if (credentials.Clients.Count - options.CredentialStartIndex < finalTarget)
             return FiestaLoadRampResult.CreateBlocked(
-                $"Credential-Manifest enthält nur {credentials.Clients.Count:N0} eindeutige Clients; benötigt werden {finalTarget:N0}.");
+                $"Credential-Manifest enthält {credentials.Clients.Count:N0} eindeutige Clients; " +
+                $"Startindex {options.CredentialStartIndex + 1:N0} und Ziel {finalTarget:N0} passen nicht in das Manifest.");
 
-        if (credentials.Clients.Take(finalTarget).Any(x => x.CreateCharacterIfMissing)
+        if (credentials.Clients.Skip(options.CredentialStartIndex).Take(finalTarget)
+            .Any(x => x.CreateCharacterIfMissing)
             && string.IsNullOrWhiteSpace(options.ClientOptions.CharacterCreateTemplatePath))
         {
             return FiestaLoadRampResult.CreateBlocked(
@@ -110,7 +112,7 @@ public sealed class FiestaLoadRampCoordinator
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         Trace("BASELINE",
-            $"ZonePlayer={baselinePlayers}; PoolLimit={baseline.Pools.PlayerLimit}; " +
+            $"CredentialStartIndex={options.CredentialStartIndex}; ZonePlayer={baselinePlayers}; PoolLimit={baseline.Pools.PlayerLimit}; " +
             $"Listener={listener.MaxAccept}; StageTargets={string.Join(",", targets)}; " +
             $"StartIntervalMs={options.ClientStartInterval.TotalMilliseconds:N0}; HoldSec={options.SessionHoldDuration.TotalSeconds:N0}");
         progress?.Invoke(new FiestaLoadRampProgress(
@@ -150,7 +152,7 @@ public sealed class FiestaLoadRampCoordinator
                 for (var index = started; index < target; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var credential = credentials.Clients[index];
+                    var credential = credentials.Clients[options.CredentialStartIndex + index];
                     var client = new FiestaHeadlessLoadClient();
                     var clientOptions = CloneClientOptions(options.ClientOptions, options.SessionHoldDuration);
 
@@ -648,6 +650,8 @@ public sealed class FiestaLoadRampOptions
 
     public string TargetZoneExePath { get; init; } = string.Empty;
     public string CredentialManifestPath { get; init; } = string.Empty;
+    // Zero-based identity offset used by the isolated A test. Ramp B always starts at zero.
+    public int CredentialStartIndex { get; init; }
     public string DiagnosticsPath { get; init; } = string.Empty;
     public FiestaHeadlessProbeOptions ClientOptions { get; init; } = new();
     public IReadOnlyList<int> StageTargets { get; init; } = DiagnosticStageTargets;
@@ -677,6 +681,8 @@ public sealed class FiestaLoadRampOptions
             throw new ArgumentException("Für Originalserver-Lasttests ist ZoneTransferTemplatePath zwingend.");
         if (StageTargets.Count == 0 || StageTargets.Any(x => x <= 0))
             throw new ArgumentException("StageTargets muss positive Werte enthalten.");
+        if (CredentialStartIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(CredentialStartIndex));
         if (ClientStartInterval < TimeSpan.Zero
             || StageReadyTimeout <= TimeSpan.Zero
             || ReadyPollInterval <= TimeSpan.Zero
@@ -766,6 +772,17 @@ public sealed class FiestaLoadRampOptions
             };
             if (!autoManifest.IsLoginAutoRegistrationCompatible(out _))
                 throw new InvalidDataException("r_-Credential-Manifest wurde fälschlich als inkompatibel abgelehnt.");
+
+            // The probe must select an existing identity from the manifest, not create
+            // new login credentials or mutate the 1600-client benchmark ordering.
+            var source = Enumerable.Range(1, 1600).Select(n => $"r_ngl{n:000000}").ToArray();
+            const int probeIdentityNumber = 515;
+            if (source[probeIdentityNumber - 1] != "r_ngl000515"
+                || source[0] != "r_ngl000001")
+            {
+                throw new InvalidDataException(
+                    "Gezielte A-Probe verletzt die 1-basierte Identitätsauswahl oder verändert Ramp B.");
+            }
 
             var staleManifest = new FiestaLoadCredentialManifest
             {
