@@ -33,6 +33,7 @@ public partial class MainWindow
     private TextBox? _zoneLoadStartIntervalBox;
     private TextBox? _zoneLoadSingleIdentityBox;
     private TextBox? _zoneLoadPriorityIdentityBox;
+    private TextBox? _zoneLoadDeferredZoneReentryBox;
     private TextBox? _zoneLoadLoginHostBox;
     private TextBox? _zoneLoadLoginPortBox;
     private TextBox? _zoneLoadWorldIdBox;
@@ -440,6 +441,19 @@ public partial class MainWindow
         _zoneLoadPriorityIdentityBox = CreateZoneLoadTextBox(
             54, "0 = Standard; 1..1600 = diese Identität zuerst für diagnostische Ramp B", "0");
         actionRow.Children.Add(_zoneLoadPriorityIdentityBox);
+        actionRow.Children.Add(new TextBlock
+        {
+            Text = "B: Nachaufnahme",
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 4, 0),
+            ToolTip = "0 = Standard/vergleichbare Ramp; 1 = nach vier transienten Zone-Abbrüchen " +
+                      "eine zusätzliche vollständige Anmeldung nach 20 Sekunden. " +
+                      "Nur Diagnose, jeder Spieler muss weiterhin echten ShinePlayer nachweisen."
+        });
+        _zoneLoadDeferredZoneReentryBox = CreateZoneLoadTextBox(
+            42, "0 = Baseline; 1 = einmalige verzögerte Wiederanmeldung nach 4x SH6/2-Transportabbruch", "0");
+        actionRow.Children.Add(_zoneLoadDeferredZoneReentryBox);
         actionRow.Children.Add(CreateZonePoolButton("Abbrechen", false, async () =>
         {
             _zoneLoadRampCancellation?.Cancel();
@@ -885,6 +899,9 @@ public partial class MainWindow
             var priorityIdentityNumber = singleClientOnly
                 ? 0
                 : ParseZoneLoadInt(_zoneLoadPriorityIdentityBox, "B: zuerst #", 0, credentialManifest.Clients.Count);
+            var delayedZoneReentryAttempts = singleClientOnly
+                ? 0
+                : ParseZoneLoadInt(_zoneLoadDeferredZoneReentryBox, "B: Nachaufnahme", 0, 1);
             // Preserve the previously validated two-hour hold budget while extending it
             // for the extra wall time incurred by deliberate 2s/3s admission pacing.
             var holdDuration = singleClientOnly
@@ -915,6 +932,7 @@ public partial class MainWindow
                             : null,
                     StepTimeout = singleClientOnly ? TimeSpan.FromSeconds(15) : TimeSpan.FromSeconds(60),
                     ZoneLoginTimeout = singleClientOnly ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(90),
+                    DelayedZoneReentryAttempts = delayedZoneReentryAttempts,
                     HoldDuration = holdDuration
                 },
                 StageTargets = singleClientOnly
@@ -943,7 +961,9 @@ public partial class MainWindow
                 ? $"1-Client-Probe für Credential #{selectedIdentityNumber} ({credentialManifest.Clients[selectedIdentityNumber - 1].Username}) läuft: Login → World → Zone → ShinePlayer + Log-Audit …"
                 : $"Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · " +
                   $"{(priorityIdentityNumber == 0 ? "Standardreihenfolge" : $"DIAGNOSE-REIHENFOLGE (#{priorityIdentityNumber} zuerst, keine Baseline)")}" +
-                  $" · {startIntervalSeconds}-s Starttakt · 3-min Ready-Budget je Stufe · Zone-Handoff hat bounded Retry nur vor SH6/2 · Holding folgt dem echten Capture: Zone sendet SH2/4 (~30-s-Takt), Client antwortet CH2/5; kein aktives CH2/4 · 5-Min-Stabilität + Log-Audit …");
+                  $" · {startIntervalSeconds}-s Starttakt · " +
+                  $"{(delayedZoneReentryAttempts == 0 ? "reguläre Ramp ohne Nachaufnahme" : "DIAGNOSE-Nachaufnahme aktiv (20s, max. ein vollständiger Neuversuch)")}" +
+                  $" · 3-min Ready-Budget je Stufe · Zone-Handoff hat bounded Retry nur vor SH6/2 · Holding folgt dem echten Capture: Zone sendet SH2/4 (~30-s-Takt), Client antwortet CH2/5; kein aktives CH2/4 · 5-Min-Stabilität + Log-Audit …");
 
             var result = await new FiestaLoadRampCoordinator().RunAsync(
                 options,
