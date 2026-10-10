@@ -95,7 +95,11 @@ public sealed class FiestaHeadlessLoadClient
         // describes a full 4/4 pre-SH6/2 transient Zone admission sequence.
         => (stage is FiestaLoadClientStage.ZoneConnected or FiestaLoadClientStage.ZoneRedirectReceived)
            && detail.Contains("Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4", StringComparison.Ordinal)
-           && detail.Contains("EndOfStreamException", StringComparison.Ordinal)
+           // Inspect the FINAL fourth attempt, not a previous EOF in the retry history.
+           // This prevents hiding an unrelated fourth-attempt failure behind old EOFs.
+           && detail.LastIndexOf("Versuch 4:", StringComparison.Ordinal) is var finalAttemptIndex
+           && finalAttemptIndex >= 0
+           && detail.IndexOf("EndOfStreamException", finalAttemptIndex, StringComparison.Ordinal) >= 0
            && !detail.Contains("SH3/9 Error", StringComparison.Ordinal)
            && !detail.Contains("SH4/2 ConnectError", StringComparison.Ordinal)
            && !detail.Contains("SH5/4", StringComparison.Ordinal);
@@ -783,6 +787,9 @@ public sealed class FiestaHeadlessLoadClient
                 || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.LoginAuthenticated, transientZoneAdmissionFailure)
                 || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneRedirectReceived,
                     "Zone-Handoff scheiterte vor SH6/2 bei Versuch 3/4. EndOfStreamException")
+                || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneRedirectReceived,
+                    "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. Verlauf: " +
+                    "Versuch 1: EndOfStreamException | Versuch 4: InvalidDataException · falsches Paket")
                 || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneRedirectReceived,
                     "Zone-Handoff scheiterte vor SH6/2 bei Versuch 4/4. SH4/2 ConnectError · EndOfStreamException")
                 || IsDelayedZoneAdmissionFailure(FiestaLoadClientStage.ZoneConnected,
