@@ -18,7 +18,7 @@ Der Debugger setzt **nur einen One-Shot-Breakpoint** am Fehlerzweig (Zone+0x0005
 ## Voraussetzungen
 
 1. Isolierte Testzone, WinDbg **x86** (Debugging Tools for Windows), administrative Debuggerrechte. Kein Attach an den Server des 1600er-Kapazitätsbenchmarks.
-2. Exakt die oben genannte original Zone.exe und passende Zone.pdb; nicht eine gehookte/gepatchte Kopie. Das Vorbereitungsskript lehnt SHA-/PE-RSDS-Abweichungen ab.
+2. Exakt die oben genannte original Zone.exe und passende Zone.pdb; nicht eine gehookte/gepatchte Kopie. Das Vorbereitungsskript lehnt SHA-, PE-RSDS- **und PDB-Info-Stream-GUID/Age-Abweichungen** ab.
 3. PDB- und Capture-Verzeichnis ohne Leerzeichen oder problematische Sonderzeichen (Beispiel: C:\NextGenSymbols und C:\NextGenZone1669Capture).
 4. Bei WinDbg-Attach anhand von **lmvm Zone** verifizieren, dass der tatsächlich geladene Testprozess zu der geprüften Datei gehört und die passenden PDB-Symbole geladen wurden. Sonst nicht fortfahren.
 5. Der Trace enthält möglicherweise private Prozess- und Charakterdetails. Nur nach Durchsicht weitergeben.
@@ -31,7 +31,7 @@ Aus dem Root von NextGen-Server-Manager in PowerShell:
 
     .\scripts\New-Zone1669OneShotCapture.ps1 -ZoneExePath 'C:\NextGenFiestaServer\Zone\Zone.exe' -ZonePdbPath 'C:\NextGenSymbols\Zone.pdb' -OutputDirectory 'C:\NextGenZone1669Capture'
 
-Die Pfade sind **Beispiele** und an den tatsächlichen separaten Testserver anzupassen. Der Vorgang prüft die Zone.exe-Datei und erzeugt in einem neuen Zeitstempel-Unterordner:
+Die Pfade sind **Beispiele** und an den tatsächlichen separaten Testserver anzupassen. Der Vorgang prüft die Zone.exe-Datei **und die echte Zone.pdb-MSF-Info-Signatur** und erzeugt erst danach in einem neuen Zeitstempel-Unterordner:
 
 - Zone1669_Arm.wds – ein einmaliger Breakpoint auf der 1669-Fehler-Verzweigung, dann fortsetzen.
 - Zone1669_Hit.wds – Register, Rückgabewert, Koordinaten, FieldMap-Grenzen, Referenzwerte und Aufrufstack aufnehmen, dann fortsetzen.
