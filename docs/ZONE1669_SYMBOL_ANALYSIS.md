@@ -16,7 +16,9 @@ Zone.exe is a 32-bit PE with image base 0x00400000 and .text section RVA 0x1000.
 ## Root trigger proven by Zone.exe disassembly + matched Zone.pdb
 
 ```text
-ShineMobileObject::smo_SkillBash_Blast (RVA 0x0017CD40)
+ShineMobileObject::so_Routine (RVA 0x0016A080)
+       direct call to smo_SkillBash_Blast at RVA 0x0016A858
+     -> ShineMobileObject::smo_SkillBash_Blast (RVA 0x0017CD40)
        direct call to smo_ShadowStep at RVA 0x0017CFDA
      -> ShineMobileObject::smo_ShadowStep (RVA 0x0005AD10)
         -> RadianMoveTrack::rmt_Calculate (RVA 0x00060450)
@@ -59,7 +61,7 @@ The PDB TPI stream contains `FieldMap::FM_MarkingError` enum index `0x5436` and 
 
 **High-confidence conclusion:** The logged `so_Disconnect[1669]` is produced by the ShadowStep error branch. For this argument combination, an **out-of-bounds X/Y relative to the current FieldMap** is the specifically demonstrated failure mechanism; `FM_BLOCKED` here must not be casually interpreted as player-pool exhaustion or another player's occupied tile.
 
-**Upstream trigger:** Only one direct static `call` of this ShadowStep implementation was found by disassembling the EXE .text, from `smo_SkillBash_Blast`. This points to knockback/shadow-motion handling. Indirect calls elsewhere cannot be excluded without runtime tracing. **Not yet determined:** the actor/skill initiating the bash, the actual X/Y and map bounds, or whether a scripted AI behavior causes this during login.
+**Upstream trigger:** `smo_SkillBash_Blast` is directly dispatched in `ShineMobileObject::so_Routine` (VA `0x0056A858`, RVA `0x0016A858`); this is an in-game mobile-object routine pathway, not the dedicated network `sp_NC_MAP_LOGIN_REQ` handler. Only one direct static `call` of this ShadowStep implementation was found by disassembling the EXE .text, from `smo_SkillBash_Blast`. This points to knockback/shadow-motion handling. Indirect calls elsewhere cannot be excluded without runtime tracing. **Not yet determined:** the actor/skill initiating the bash, the actual X/Y and map bounds, or whether a scripted AI behavior causes this during login.
 
 ## Observational corroboration (not the source of the disassembly claim)
 
