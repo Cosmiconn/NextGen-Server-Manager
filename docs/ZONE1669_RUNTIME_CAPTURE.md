@@ -4,6 +4,30 @@
 
 Weitere Evidenz: [ZONE1669_SYMBOL_ANALYSIS.md](ZONE1669_SYMBOL_ANALYSIS.md) und [SCALING_AND_PROVISIONING.md](SCALING_AND_PROVISIONING.md).
 
+## Einfacher Weg: vorhandene Zone01 verwenden
+
+Für den Rechner mit `C:\NextGenFiesta\Server\Zone01\Zone.exe` gibt es jetzt einen Ein-Befehl-Helfer:
+
+    .\scripts\Start-Zone1669Zone01.ps1
+
+Diesen Befehl **aus dem Repository-Hauptordner in PowerShell als Administrator** ausführen, während die isolierte Zone01 läuft. Das Skript:
+
+1. findet `Zone01\Zone.exe` und sucht `Zone.pdb` in naheliegenden lokalen Ordnern;
+2. prüft die originale EXE-SHA-256 und die **PDB-/PE-GUID/Age**; bei Abweichung wird **kein** Debugger-Befehl freigegeben;
+3. erkennt die richtige laufende Zone01 anhand **ihres vollständigen Prozesspfades**, nicht bloß des Namens `Zone.exe`;
+4. fragt ausdrücklich nach `TESTZONE01`. Nur eine **spielerfreie, nicht produktive** Zone bestätigen;
+5. startet klassisches WinDbg x86 automatisch. Beim neuen Store-WinDbg zeigt es PID und einen kopierten Einfüge-Befehl an.
+
+Wenn die originale `Zone.pdb` nicht automatisch gefunden wird, muss sie nur einmal hierhin kopiert werden:
+
+    C:\NextGenZone1669Capture\Symbols\Zone.pdb
+
+Danach **denselben** Startbefehl erneut ausführen. Die originale Zone.exe oder PDB wird nicht verändert. Wenn der SHA-256-Hash der Zone01 vom dokumentierten Original abweicht, **nicht** die Prüfung abschalten: dann liegt ein anderer Build vor, dessen Debug-Adressen erneut untersucht werden müssen.
+
+Der Debugger legt beim ersten Treffer unter `C:\NextGenZone1669Capture\run-...\` die Datei `Zone1669_FirstHit_*.log` an. Diese Datei nach Durchsicht zur Diagnose bereitstellen. Die Originalserver-Verbindungen werden nicht absichtlich manipuliert; Debugger-Attach und Breakpoint können den Testprozess aber kurz pausieren.
+
+Ohne einen angeschlossenen Testzone-Prozess kann die Messung **nicht** durchgeführt werden; der Befehl bereitet dann lediglich die Skripte vor. Mit `-PrepareOnly` kann man das bewusst so wählen.
+
 ## Technische Grundlage
 
 - Original Zone.exe (x86): SHA-256 db1cb42912556a4ea5cde5c18f15f2495b81465c70ca9c18ad5bc7e36611aff5.
