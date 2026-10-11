@@ -251,6 +251,7 @@ public sealed class FiestaHeadlessLoadClient
                         FiestaLoadClientStage.ZoneAuthenticated,
                         $"NC_MAP_LOGIN_ACK SH6/2 empfangen · Zone-Handoff Versuch {attempt}/{InitialZoneTransferMaxAttempts} " +
                         $"· Vor ACK: {zoneAck.ReceivedBeforeAck} Zone-Pakete · {zoneAck.ElapsedMs:N0} ms " +
+                        $"· BodyBytes vor ACK: {zoneAck.BodyBytesBeforeAck} · OpcodeMix: {zoneAck.OpcodeMix} " +
                         $"· letzte Opcodes: {zoneAck.RecentOpcodes}");
                     break;
                 }
@@ -770,6 +771,21 @@ public sealed class FiestaHeadlessLoadClient
             {
                 throw new InvalidDataException(
                     "Ramp-Login-Transport-Retries müssen begrenzt sein und dürfen keine explizite World-Ablehnung verdecken.");
+            }
+
+            var opcodeFixture = new Dictionary<(int Header, int Type), (int Count, long BodyBytes)>
+            {
+                [(4, 71)] = (3, 303),
+                [(4, 72)] = (1, 4),
+                [(2, 4)] = (1, 0)
+            };
+            if (FormatInitialZoneOpcodeMix(opcodeFixture) !=
+                    "SH4/71=3(303B), SH2/4=1(0B), SH4/72=1(4B)"
+                || FormatInitialZoneOpcodeMix(
+                    new Dictionary<(int Header, int Type), (int Count, long BodyBytes)>()) != "<keine>")
+            {
+                throw new InvalidDataException(
+                    "Pre-SH6/2 Opcode-Histogramm muss deterministisch, body-only und leer-sicher sein.");
             }
 
             const string transientZoneAdmissionFailure =
@@ -1515,9 +1531,23 @@ public sealed class FiestaHeadlessLoadClient
         }
     }
 
-    // Preserve the last server opcodes and the exact point of transport termination
-    // during CH6/1 -> SH6/2. No payload bytes from initialization packets are logged.
-    private static async Task<(int ReceivedBeforeAck, long ElapsedMs, string RecentOpcodes)>
+    // Preserve the last server opcodes, a bounded per-opcode count/byte histogram,
+    // and the exact transport termination point during CH6/1 -> SH6/2.
+    // Packet bodies are never written to diagnostics.
+    private static string FormatInitialZoneOpcodeMix(
+        IReadOnlyDictionary<(int Header, int Type), (int Count, long BodyBytes)> counts)
+        => counts.Count == 0
+            ? "<keine>"
+            : string.Join(", ", counts
+                .OrderByDescending(pair => pair.Value.Count)
+                .ThenBy(pair => pair.Key.Header)
+                .ThenBy(pair => pair.Key.Type)
+                .Take(6)
+                .Select(pair => $"SH{pair.Key.Header}/{pair.Key.Type}=" +
+                    $"{pair.Value.Count}({pair.Value.BodyBytes}B)"));
+
+    private static async Task<(int ReceivedBeforeAck, long ElapsedMs, string RecentOpcodes,
+        long BodyBytesBeforeAck, string OpcodeMix)>
         WaitForInitialZoneLoginAckAsync(
         FiestaWireConnection connection,
         TimeSpan timeout,
@@ -1527,9 +1557,12 @@ public sealed class FiestaHeadlessLoadClient
         var deadline = DateTime.UtcNow + timeout;
         var recent = new Queue<string>();
         var received = 0;
+        var bodyBytesBeforeAck = 0L;
+        var opcodeCounts = new Dictionary<(int Header, int Type), (int Count, long BodyBytes)>();
 
         string RecentOpcodes() => recent.Count == 0 ? "<keine>" : string.Join(", ", recent);
         string Snapshot() => $"Empfangene Zone-Pakete vor SH6/2={received}; " +
+            $"BodyBytes={bodyBytesBeforeAck}; OpcodeMix={FormatInitialZoneOpcodeMix(opcodeCounts)}; " +
             $"Dauer={Stopwatch.GetElapsedTime(started).TotalMilliseconds:N0}ms; " +
             $"letzte Opcodes: {RecentOpcodes()}";
 
@@ -1550,9 +1583,16 @@ public sealed class FiestaHeadlessLoadClient
                     $"{ex.GetType().Name}: {ex.Message}", ex);
             }
 
-            var precedingOpcodes = packet.Header == 6 && packet.Type == 2
-                ? RecentOpcodes()
-                : string.Empty;
+            var isZoneAck = packet.Header == 6 && packet.Type == 2;
+            var precedingOpcodes = isZoneAck ? RecentOpcodes() : string.Empty;
+            if (!isZoneAck)
+            {
+                bodyBytesBeforeAck += packet.Body.Length;
+                var key = (packet.Header, packet.Type);
+                opcodeCounts.TryGetValue(key, out var previous);
+                opcodeCounts[key] = (previous.Count + 1, previous.BodyBytes + packet.Body.Length);
+            }
+
             received++;
             recent.Enqueue($"SH{packet.Header}/{packet.Type}({packet.Body.Length}B)");
             while (recent.Count > 8)
@@ -1583,7 +1623,9 @@ public sealed class FiestaHeadlessLoadClient
             if (packet.Header == 6 && packet.Type == 2)
                 return (received - 1,
                     (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                    precedingOpcodes);
+                    precedingOpcodes,
+                    bodyBytesBeforeAck,
+                    FormatInitialZoneOpcodeMix(opcodeCounts));
         }
 
         throw new TimeoutException($"Zone SH6/2 nach {timeout.TotalSeconds:N0}s nicht empfangen · {Snapshot()}.");
