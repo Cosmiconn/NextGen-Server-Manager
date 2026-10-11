@@ -132,6 +132,64 @@ if (-not $found) {
     throw "PE RSDS debug identity mismatch: expected GUID $expectedGuid / age $expectedAge. No scripts written."
 }
 
+# Independently verify GUID and Age stored in PDB MSF7 stream #1 (PDB Info).
+# Merely naming an unrelated file Zone.pdb is not sufficient.
+$pdbBytes = [IO.File]::ReadAllBytes($pdb)
+if ($pdbBytes.Length -lt 56 -or
+    -not [Text.Encoding]::ASCII.GetString($pdbBytes, 0, 24).StartsWith('Microsoft C/C++ MSF 7.00')) {
+    throw 'Zone.pdb is not a valid MSF 7.0 PDB; no scripts written.'
+}
+$blockSize = [BitConverter]::ToUInt32($pdbBytes, 32)
+$directoryBytes = [BitConverter]::ToUInt32($pdbBytes, 44)
+$blockMapAddress = [BitConverter]::ToUInt32($pdbBytes, 52)
+if ($blockSize -lt 512 -or $blockSize -gt 4096 -or
+    $directoryBytes -lt 32 -or $directoryBytes -gt $pdbBytes.Length -or
+    $blockMapAddress * [long]$blockSize -ge $pdbBytes.Length) {
+    throw 'Zone.pdb has invalid MSF directory metadata; no scripts written.'
+}
+$directoryBlockCount = [int][Math]::Ceiling($directoryBytes / [double]$blockSize)
+if ($directoryBlockCount -gt [int]($blockSize / 4)) {
+    throw 'Zone.pdb uses an unsupported oversized directory map; no scripts written.'
+}
+$directory = New-Object byte[] ([int]$directoryBytes)
+for ($b = 0; $b -lt $directoryBlockCount; $b++) {
+    $blockIdOffset = [int]($blockMapAddress * [long]$blockSize + $b * 4)
+    $blockId = [BitConverter]::ToUInt32($pdbBytes, $blockIdOffset)
+    $source = $blockId * [long]$blockSize
+    $length = [int][Math]::Min($blockSize, $directoryBytes - $b * $blockSize)
+    if ($source + $length -gt $pdbBytes.Length) {
+        throw 'Zone.pdb directory block is out of bounds; no scripts written.'
+    }
+    [Array]::Copy($pdbBytes, $source, $directory, $b * [long]$blockSize, $length)
+}
+$streamCount = [BitConverter]::ToUInt32($directory, 0)
+if ($streamCount -lt 2 -or (4 + $streamCount * 4) -ge $directory.Length) {
+    throw 'Zone.pdb stream directory is invalid; no scripts written.'
+}
+$stream0Size = [BitConverter]::ToUInt32($directory, 4)
+$stream1Size = [BitConverter]::ToUInt32($directory, 8)
+if ($stream0Size -eq [uint32]::MaxValue -or $stream1Size -lt 28 -or
+    $stream1Size -eq [uint32]::MaxValue) {
+    throw 'Zone.pdb Info stream is missing; no scripts written.'
+}
+$stream0Blocks = [int][Math]::Ceiling($stream0Size / [double]$blockSize)
+$stream1BlockOffset = [int](4 + $streamCount * 4 + $stream0Blocks * 4)
+if ($stream1BlockOffset + 4 -gt $directory.Length) {
+    throw 'Zone.pdb Info stream block pointer is invalid; no scripts written.'
+}
+$stream1Block = [BitConverter]::ToUInt32($directory, $stream1BlockOffset)
+$infoOffset = [int]($stream1Block * [long]$blockSize)
+if ($infoOffset + 28 -gt $pdbBytes.Length) {
+    throw 'Zone.pdb Info stream block lies outside the file; no scripts written.'
+}
+$pdbAge = [BitConverter]::ToUInt32($pdbBytes, $infoOffset + 8)
+$pdbGuidBytes = New-Object byte[] 16
+[Array]::Copy($pdbBytes, $infoOffset + 12, $pdbGuidBytes, 0, 16)
+$pdbGuid = [Guid]::new([byte[]]$pdbGuidBytes)
+if ($pdbAge -ne $expectedAge -or $pdbGuid -ne $expectedGuid) {
+    throw "Zone.pdb GUID/Age mismatch: expected $expectedGuid/$expectedAge, observed $pdbGuid/$pdbAge. No scripts written."
+}
+
 $root = [IO.Path]::GetFullPath($OutputDirectory)
 # WinDbg script invocation and bp command strings have sensitive punctuation rules.
 # Require a plain path to make the copy/paste debugger commands unambiguous.
@@ -158,7 +216,7 @@ $arm = $armTemplate.Replace('__PDBDIR__', $pdbDir).Replace('__HITPATH__', $hitPa
 Write-Output 'ZONE1669 CAPTURE PREPARED - no process has been attached or modified.'
 Write-Output "Zone.exe SHA256: $actualHash"
 Write-Output "Zone.exe RSDS GUID/Age: $expectedGuid / $expectedAge"
-Write-Output "PDB path (verify symbol load in WinDbg): $pdb"
+Write-Output "PDB verified (GUID/Age = original; check live symbol load in WinDbg): $pdb"
 Write-Output "Failure-only breakpoint: Zone+$failureRva (one-shot)"
 Write-Output "WinDbg (x86) command to run AFTER attaching to the ISOLATED TEST Zone.exe:"
 Write-Output ('  $$>a<' + $armPath)
