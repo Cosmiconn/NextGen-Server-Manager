@@ -255,3 +255,60 @@ zur Reproduktion die hochgeladene vollständige Datei aufbewahren.
   `PriorityCredentialNumber=0` und
   `DelayedZoneReentryAttempts=0` ist angekündigt.
   Sein Ergebnis **nicht vorab** als PASS behandeln.
+
+
+### Kontrolllauf ohne verzögerte Nachaufnahme: 900 PASS, 999 Ready (2026-10-11)
+
+Quelle: unabhängiger Original-Trace des Betreibers
+`player-ramp-trace-20261010-233622-403.log`, UTC 2026-10-10
+23:36:23 bis 2026-10-11 00:12:47; Ergebnis-Screenshot
+`LOAD RAMP BLOCKED`, Stufe 1000.
+
+- **Gleicher Starttakt:** `StartIntervalMs=2000`, `ZonePlayer=0`,
+  `PoolLimit=2000`, `Listener=2000`, `PriorityCredentialNumber=0`.
+  **Einziger planmäßiger Modusunterschied:** `DelayedZoneReentryAttempts=0`.
+- **16 Laststufen bis einschließlich 900 PASS**. Bei 1000:
+  `Ready=999`, `Failed=1`, `ShinePlayer=999`,
+  `ServerMinusReady=0`; 1000 ist **nicht** verifiziert.
+- Der betroffene Account `r_ngl000985` erreichte viermal
+  `CH6/1`, aber **kein** `SH6/2`.
+  Versuche 1–4: `EndOfStreamException` vom Server nach
+  678 / 680 / 682 / 686 empfangenen Initialisierungspaketen;
+  Wartezeiten ungefähr 593 / 671 / 597 / 569 ms.
+  Jeder zweite und spätere Versuch erneuerte vorher
+  `Login → World → SH3/20 → SH4/3`.
+- **Derselbe Account 985 war im vorherigen 1600er-PASS-Lauf
+  beim ersten Zone-Handoff erfolgreich.** Dort vor `SH6/2`
+  lediglich **334** Zone-Pakete bei **539 ms**.
+  Auch schon Account 900: **244** Pakete (1600er-Lauf) gegen
+  **584** Pakete (Kontrolllauf). Im Bereich Accounts 900–999
+  stieg die mediane Initialisierungslast von ca. **297** auf
+  **635,5** Pakete. Das ist ein messbarer Unterschied der
+  *tatsächlich abgearbeiteten Zone-Initialisierungsdaten*,
+  keine nachgewiesene Hardware- oder Hardlimitänderung.
+- Der erfolgreiche 1600er-Lauf hatte `DeferredZoneReentries=0`.
+  **Daraus lässt sich nicht ableiten, dass das Diagnose-Flag
+  den zweiten Fehler verursacht hat.** Beide Läufe nutzen
+  dieselben vier normalen Zone-Handoff-Versuche. Die Unterschiede
+  können auch an nicht kontrollierter Zone-Weltbelegung,
+  Initialisierungsverkehr oder fluktuierender Last liegen.
+- Wie beim ersten Lauf bleibt
+  `LOG DELTA REVIEW` für den KingdomQuest-
+  `WorldManagerSession::wms_NC_KQ_W2Z_MAKED_CMD : Buffer full[0]`
+  bestehen. Keine neue harte Patch-Crash-Signatur belegt;
+  **kein CLEAN-Gesamtaudit**.
+
+**Diagnoseerweiterung nach diesem Vergleich:** Zukünftige
+Zone-Handoff-Traces enthalten neben bereits vorhandener
+Paketanzahl/Dauer und letzten Opcodes nun auch die gesamte
+`BodyBytes`-Zahl und einen begrenzten `OpcodeMix` mit
+Top-6-Paketarten samt Zähler und Byte-Summe.
+Es werden **keine Paket-Payloads** gespeichert.
+Diese Messung verändert weder Login-/Retry-Logik noch
+`ClientReady`-/Runtime-PASS-Kriterien.
+
+Für eine ursächliche Aussage braucht es einen weiteren isolierten
+Lauf mit identischem Starttakt, sauberer Zone und dieser neuen
+Opcode-Statistik; zusätzlich World/Zone-Logzeitpunkte zu
+`so_Disconnect` und `CoordRepairLog` korrelieren.
+Weder Spieler-Hardlimits noch Binary-Hooks unbewiesen ändern.
