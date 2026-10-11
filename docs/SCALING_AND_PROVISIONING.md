@@ -312,3 +312,22 @@ Lauf mit identischem Starttakt, sauberer Zone und dieser neuen
 Opcode-Statistik; zusätzlich World/Zone-Logzeitpunkte zu
 `so_Disconnect` und `CoordRepairLog` korrelieren.
 Weder Spieler-Hardlimits noch Binary-Hooks unbewiesen ändern.
+
+### PDB-Nachweis für Zone-Disconnect 1669 (2026-10-11)
+
+Mit den **exakt passenden Original-Zone.exe/Zone.pdb** wurde der häufige
+`ShinePlayer::so_Disconnect[1669]`-Pfad symbolisiert. Das Literal `1669`
+wird in `ShineMobileObject::smo_ShadowStep` beim fehlgeschlagenen
+`FieldMap::fm_Marking(...,1)` an den virtuellen Disconnect übergeben.
+Der direkte Aufrufer ist `smo_SkillBash_Blast` innerhalb der
+`so_Routine`-Verarbeitung. Für diesen Marking-Aufruf deutet der
+Disassemblierungszweig auf **X/Y außerhalb der FieldMap-Grenzen**;
+`FM_BLOCKED=3` kommt aus der originalen PDB-Enum. Die tatsächliche
+Fehlerkoordinate und der auslösende Skill-/Rückstoß-Akteur sind **noch
+offen**, daher keine Änderung der Original-Binärdateien oder Limits.
+Die `CoordRepairLog`-TSStart-Koordinaten dürfen nicht automatisch als
+fehlerhaftes X/Y interpretiert werden. Der erfolgreiche 1600er-PASS bleibt
+als Kapazitätsbeleg erhalten, die Zuverlässigkeitsfrage bleibt separat.
+
+Vollständige RVA-, Assembly-, PDB- und Log-Evidenz sowie sichere
+Reproduktionsschritte: [ZONE1669_SYMBOL_ANALYSIS.md](ZONE1669_SYMBOL_ANALYSIS.md).
