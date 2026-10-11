@@ -70,6 +70,20 @@ jobs:
           "SOURCE_ROOT=$sourceRoot" >> $env:GITHUB_ENV
           Write-Host "Using restored 0.3.4 baseline source: $sourceRoot"
 
+      - name: Zone 1669 one-shot debugger capture selftest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\New-Zone1669OneShotCapture.ps1'
+          if (-not (Test-Path -LiteralPath $scriptPath)) {
+            throw 'Zone 1669 capture script is missing.'
+          }
+          $output = @(& $scriptPath -TemplateSelfTest)
+          if ($output -notcontains 'ZONE1669_CAPTURE_SELFTEST PASS') {
+            throw 'Zone 1669 capture template selftest failed.'
+          }
+          Write-Host 'ZONE1669_CAPTURE_SELFTEST PASS'
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
