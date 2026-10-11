@@ -120,7 +120,7 @@ for ($i = 0; $i -le $bytes.Length - 24; $i++) {
         $bytes[$i+2] -eq 0x44 -and $bytes[$i+3] -eq 0x53) {
         $guidBytes = New-Object byte[] 16
         [Array]::Copy($bytes, $i + 4, $guidBytes, 0, 16)
-        $guid = New-Object System.Guid (,$guidBytes)
+        $guid = [Guid]::new([byte[]]$guidBytes)
         $age = [BitConverter]::ToUInt32($bytes, $i + 20)
         if ($guid -eq $expectedGuid -and $age -eq $expectedAge) {
             $found = $true
@@ -135,11 +135,11 @@ if (-not $found) {
 $root = [IO.Path]::GetFullPath($OutputDirectory)
 # WinDbg script invocation and bp command strings have sensitive punctuation rules.
 # Require a plain path to make the copy/paste debugger commands unambiguous.
-if ($root -match '[\s";' + [char]96 + ']') {
+if ($root -match '[\s";]' -or $root.Contains([char]96)) {
     throw 'Please choose a Windows OutputDirectory path without spaces, quotes, semicolons or backticks.'
 }
 $pdbDir = [IO.Path]::GetDirectoryName($pdb)
-if ($pdbDir -match '[\s";' + [char]96 + ']') {
+if ($pdbDir -match '[\s";]' -or $pdbDir.Contains([char]96)) {
     throw 'Please put the PDB in a directory without spaces, quotes, semicolons or backticks.'
 }
 $runId = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')
