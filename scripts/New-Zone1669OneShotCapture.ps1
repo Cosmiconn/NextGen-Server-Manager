@@ -114,19 +114,19 @@ if ($actualHash -ne $expectedSha256) {
 # Inspect the PDB lookup identity embedded in the original PE's RSDS record.
 # The SHA-256 check above prevents incorrectly accepting an unrelated lookalike PE.
 $bytes = [IO.File]::ReadAllBytes($exe)
+$binaryView = [Text.Encoding]::ASCII.GetString($bytes)
 $found = $false
-for ($i = 0; $i -le $bytes.Length - 24; $i++) {
-    if ($bytes[$i] -eq 0x52 -and $bytes[$i+1] -eq 0x53 -and
-        $bytes[$i+2] -eq 0x44 -and $bytes[$i+3] -eq 0x53) {
-        $guidBytes = New-Object byte[] 16
-        [Array]::Copy($bytes, $i + 4, $guidBytes, 0, 16)
-        $guid = [Guid]::new([byte[]]$guidBytes)
-        $age = [BitConverter]::ToUInt32($bytes, $i + 20)
-        if ($guid -eq $expectedGuid -and $age -eq $expectedAge) {
-            $found = $true
-            break
-        }
+$i = $binaryView.IndexOf('RSDS', [StringComparison]::Ordinal)
+while ($i -ge 0 -and $i -le $bytes.Length - 24) {
+    $guidBytes = New-Object byte[] 16
+    [Array]::Copy($bytes, $i + 4, $guidBytes, 0, 16)
+    $guid = [Guid]::new([byte[]]$guidBytes)
+    $age = [BitConverter]::ToUInt32($bytes, $i + 20)
+    if ($guid -eq $expectedGuid -and $age -eq $expectedAge) {
+        $found = $true
+        break
     }
+    $i = $binaryView.IndexOf('RSDS', $i + 4, [StringComparison]::Ordinal)
 }
 if (-not $found) {
     throw "PE RSDS debug identity mismatch: expected GUID $expectedGuid / age $expectedAge. No scripts written."
