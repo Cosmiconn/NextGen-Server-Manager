@@ -32,7 +32,6 @@ internal sealed class ZoneLocalDiagnosticObserver
         try
         {
             var matches = new List<(int Pid, DateTime StartUtc)>();
-            using var _ = new ProcessInventoryScope();
             foreach (var proc in Process.GetProcessesByName("Zone"))
             {
                 using (proc)
@@ -92,9 +91,4 @@ internal sealed class ZoneLocalDiagnosticObserver
     private static ZonePoolRuntimeTestObservation Blocked(string detail, string target = "")
         => new() { Blocked = true, Status = "BLOCKED", TargetPath = target, Detail = detail };
 
-    // Named type keeps the same scoped ownership model as other runtime probes.
-    private sealed class ProcessInventoryScope : IDisposable
-    {
-        public void Dispose() { }
-    }
 }
