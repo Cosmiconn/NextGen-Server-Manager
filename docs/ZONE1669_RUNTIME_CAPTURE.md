@@ -28,6 +28,51 @@ Der Debugger legt beim ersten Treffer unter `C:\NextGenZone1669Capture\run-...\`
 
 Ohne einen angeschlossenen Testzone-Prozess kann die Messung **nicht** durchgeführt werden; der Befehl bereitet dann lediglich die Skripte vor. Mit `-PrepareOnly` kann man das bewusst so wählen.
 
+## WinDbg-Skriptkorrektur (2026-10-12)
+
+**Bekannter Fehler in älteren Skriptversionen:** Die Befehlsform `$>a<...`
+fasst Skriptzeilen in **einen** Befehlsblock zusammen. Dadurch kann
+`.sympath+` versehentlich `.reload`, `lmvm`, `bp`, `bl` und `g`
+als weitere Symbolpfade interpretieren. Symptome sind
+`Error: Execute .sympath(+) command attempts to access 'g'`,
+`(no symbols)`, kein aktivierter Breakpoint und kein FirstHit-Log.
+
+**Korrigiert:** Beide Aufrufe (Arm-Skript und Hit-Skript) verwenden
+nun die **zeilenweise** Syntax `$<...`, nicht `$>a<...`.
+Der Fehler bedeutet nicht, dass Zone01/PDB beschädigt wurden.
+
+Wenn die alte Skriptdatei schon in WinDbg ausgeführt wurde:
+- `g` aus dem früheren Versuch setzt die Zone lediglich fort, **ohne**
+  den gewünschten Breakpoint. WinDbg über `Debug → Break` wieder anhalten
+  (nur in einer bestätigten isolierten Testzone).
+- Danach **aktuelle Skripte** aus GitHub holen und
+  `.\scripts\Start-Zone1669Zone01.ps1 -PrepareOnly` ausführen,
+  damit ein neuer `run-...\Zone1669_Arm.wds` generiert wird.
+- Im bereits angehängten WinDbg den **neuen ausgegebenen**
+  `$<C:\NextGenZone1669Capture\run-...\Zone1669_Arm.wds`-
+  Befehl eingeben. **Keinen** zweiten Debugger an dieselbe PID anhängen.
+- Im Ergebnis zuerst Symbole und `bl` prüfen, und erst nach
+  plausibler Ausgabe fortsetzen. Der neue Arm-Skriptlauf führt
+  dies bereits automatisch aus.
+
+Alternativ zur sofortigen Fehlersuche auf der bestätigten Testzone,
+wenn man die alte Hit-Skriptdatei beibehalten möchte:
+```text
+.sympath+ C:\NextGenZone1669Capture\Symbols
+.reload /f Zone.exe
+lmvm Zone
+bp /1 Zone+0x0005AE5A "$<C:\NextGenZone1669Capture\run-20261012-080953-101\Zone1669_Hit.wds"
+bl
+g
+```
+Diese **sechs Befehle nacheinander im WinDbg-Command-Fenster**
+ausführen, **nicht in PowerShell**. Vor `bp` die Symbolauflösung
+mit `lmvm Zone` verifizieren und bei `(no symbols)` abbrechen.
+Die manuelle Lösung benutzt dieselbe geprüfte EXE/PDB; keine Änderung
+an `Zone.exe`.
+
+Microsoft-Dokumentation: [WinDbg-Skriptbefehle](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/-----------------------a---run-script-file-).
+
 ## Technische Grundlage
 
 - Original Zone.exe (x86): SHA-256 db1cb42912556a4ea5cde5c18f15f2495b81465c70ca9c18ad5bc7e36611aff5.
