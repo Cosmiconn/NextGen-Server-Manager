@@ -217,6 +217,10 @@ public sealed class FiestaHeadlessLoadClient
             // WorldManager lose the selected-character session and Zone fails with Invalid Regnum.
             await using var worldSession = new FiestaWorldConnectionLease(retainedWorldEntry.WorldConnection);
             SetStage(FiestaLoadClientStage.ZoneRedirectReceived);
+            // Only the original WorldManager SH4/3 redirect may select a Zone.
+            // In Zone01 diagnostics REFUSE other endpoints rather than rewriting
+            // host/port, which would invalidate the World-issued registration ticket.
+            EnsureZoneDiagnosticRedirect(options, zone);
 
             FiestaWireConnection? authenticatedZoneConnection = null;
             var zoneTransferPayload = BuildZoneTransferPayload(options, credential, randomId);
@@ -301,6 +305,15 @@ public sealed class FiestaHeadlessLoadClient
                                         "Erneuerte World-Auswahl lieferte keine gültige Zone-/Session-Registrierung.");
                                 }
 
+                                try
+                                {
+                                    EnsureZoneDiagnosticRedirect(options, renewedEntry.Zone);
+                                }
+                                catch
+                                {
+                                    await renewedEntry.WorldConnection.DisposeAsync();
+                                    throw;
+                                }
                                 worldSession.Set(renewedEntry.WorldConnection);
                                 finalWorld = renewedWorld;
                                 zone = renewedEntry.Zone;
@@ -772,6 +785,17 @@ public sealed class FiestaHeadlessLoadClient
                 throw new InvalidDataException(
                     "Ramp-Login-Transport-Retries müssen begrenzt sein und dürfen keine explizite World-Ablehnung verdecken.");
             }
+
+            var diagnostic = new FiestaHeadlessProbeOptions { RequiredZonePort = 9123 };
+            if (!ZoneRedirectMatchesDiagnosticTarget(diagnostic,
+                    new FiestaEndpointRedirect("127.0.0.1", 9123, Array.Empty<byte>()))
+                || ZoneRedirectMatchesDiagnosticTarget(diagnostic,
+                    new FiestaEndpointRedirect("127.0.0.1", 9016, Array.Empty<byte>()))
+                || !ZoneRedirectMatchesDiagnosticTarget(new FiestaHeadlessProbeOptions(),
+                    new FiestaEndpointRedirect("127.0.0.1", 9016, Array.Empty<byte>())))
+                throw new InvalidDataException(
+                    "Zone01-Diagnose muss falsche World-Redirect-Ports vor CH6/1 blockieren; " +
+                    "Standard-Ramp bleibt davon unbeeinflusst.");
 
             var opcodeFixture = new Dictionary<(int Header, int Type), (int Count, long BodyBytes)>
             {
@@ -1903,6 +1927,20 @@ public sealed class FiestaHeadlessLoadClient
         return new FiestaEndpointRedirect(host, port, transferMaterial);
     }
 
+    private static bool ZoneRedirectMatchesDiagnosticTarget(
+        FiestaHeadlessProbeOptions options, FiestaEndpointRedirect redirect)
+        => !options.RequiredZonePort.HasValue || redirect.Port == options.RequiredZonePort.Value;
+
+    private static void EnsureZoneDiagnosticRedirect(
+        FiestaHeadlessProbeOptions options, FiestaEndpointRedirect redirect)
+    {
+        if (!ZoneRedirectMatchesDiagnosticTarget(options, redirect))
+            throw new InvalidOperationException(
+                $"ZONE01_ROUTE_MISMATCH: WorldManager SH4/3 verweist auf {redirect.Host}:{redirect.Port}, " +
+                $"aber die ausdrücklich gewählte Testzone erwartet Port {options.RequiredZonePort}. " +
+                "Kein CH6/1 gesendet. World-/ServerInfo-Routing prüfen; niemals den Redirect überschreiben.");
+    }
+
     private static FiestaEndpointRedirect ParseZoneRedirect(ReadOnlySpan<byte> body)
     {
         if (body.Length < 18)
@@ -2074,6 +2112,9 @@ public sealed class FiestaHeadlessProbeOptions
     // Diagnostic only: extra FULL client-cycle after four failed Zone logins.
     // Disabled by default. Never changes the Zone pool's PASS criteria.
     public int DelayedZoneReentryAttempts { get; init; }
+    // Zone01 debugging only. Null preserves canonical 1600-player ramp.
+    // Checks the AUTHENTIC SH4/3 server redirect; never forces a different Zone.
+    public int? RequiredZonePort { get; init; }
 
     public void Validate()
     {
@@ -2085,6 +2126,8 @@ public sealed class FiestaHeadlessProbeOptions
         if (HoldDuration < TimeSpan.Zero) throw new ArgumentException("HoldDuration darf nicht negativ sein.");
         if (DelayedZoneReentryAttempts is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(DelayedZoneReentryAttempts));
+        if (RequiredZonePort.HasValue && RequiredZonePort.Value is <= 0 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(RequiredZonePort));
         if (!string.IsNullOrWhiteSpace(ClientCaptureProfilePath) && !File.Exists(ClientCaptureProfilePath))
             throw new FileNotFoundException("Client-Capture-Profil wurde nicht gefunden.", ClientCaptureProfilePath);
         if (!string.IsNullOrWhiteSpace(ZoneTransferTemplatePath) && !File.Exists(ZoneTransferTemplatePath))
