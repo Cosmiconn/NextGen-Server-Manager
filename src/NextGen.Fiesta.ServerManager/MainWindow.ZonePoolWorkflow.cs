@@ -419,6 +419,8 @@ public partial class MainWindow
         actionRow.Children.Add(_zoneLoadSingleIdentityBox);
         actionRow.Children.Add(CreateZonePoolButton("B · Ramp 1 → 1600", false,
             () => RunPlayerLoadRampUiAsync(singleClientOnly: false)));
+        actionRow.Children.Add(CreateZonePoolButton("C · Zone01-Fehlerdiagnose 1 → 1100", false,
+            () => RunPlayerLoadRampUiAsync(singleClientOnly: false, zone01Diagnostic: true)));
         actionRow.Children.Add(new TextBlock
         {
             Text = "Starttakt (s)",
@@ -833,7 +835,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task RunPlayerLoadRampUiAsync(bool singleClientOnly)
+    private async Task RunPlayerLoadRampUiAsync(bool singleClientOnly, bool zone01Diagnostic = false)
     {
         if (_zonePoolWorkflowBusy)
         {
@@ -849,6 +851,36 @@ public partial class MainWindow
         try
         {
             var target = RequireZonePoolTarget();
+            int? zone01Port = null;
+            if (zone01Diagnostic)
+            {
+                if (!string.Equals(new DirectoryInfo(Path.GetDirectoryName(target)!).Name,
+                        "Zone01", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        "Bitte zuerst oben C:\\NextGenFiesta\\Server\\Zone01\\Zone.exe als Ziel auswählen. " +
+                        "Der Zone01-Debugtest ändert keine Server-Routen.");
+
+                // A numeric, configured service port is required, not the old 9016 fallback.
+                var zoneService = RequireMainViewModel().Services.FirstOrDefault(service =>
+                    !string.IsNullOrWhiteSpace(service.ExecutablePath)
+                    && PathEqualsSafe(service.ExecutablePath, target));
+                if (zoneService?.ClientPort is not int port || port is <= 0 or > 65535)
+                    throw new InvalidOperationException(
+                        "Zone01-Client-Port ist nicht eindeutig aus den Services ermittelbar. " +
+                        "Zone01-Listener/ServerInfo im Server Manager konfigurieren; kein erratener Port.");
+                zone01Port = port;
+                var answer = MessageBox.Show(this,
+                    $"NICHT ZERTIFIZIERENDER Zone01-Diagnoselauf bis 1100 Spieler mit 2-s Starttakt. " +
+                    $"Nur echte WorldManager-Weiterleitungen zu Zone01-Port {port} werden akzeptiert; " +
+                    "auf Zone00 umgeleitete Accounts werden VOR CH6/1 abgewiesen. " +
+                    "WinDbg darf ausschließlich an einer isolierten, nicht produktiven Zone01 hängen. " +
+                    "Es werden keine Serverkonfigurationen, Konten oder EXEs automatisch geändert. " +
+                    "Ist diese Testumgebung ausdrücklich freigegeben?",
+                    "Zone01-Fehlerdiagnose (keine 1600er Zertifizierung)",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (answer != MessageBoxResult.Yes)
+                    return;
+            }
             var template = _zoneLoadTemplatePathBox?.Text.Trim();
             var clientProfile = _zoneLoadClientProfilePathBox?.Text.Trim();
             var characterCreateTemplate = _zoneLoadCharacterCreateTemplatePathBox?.Text.Trim();
@@ -892,15 +924,17 @@ public partial class MainWindow
 
             var startIntervalSeconds = singleClientOnly
                 ? 0
-                : ParseZoneLoadInt(_zoneLoadStartIntervalBox, "Starttakt in Sekunden", 1, 3);
+                : zone01Diagnostic
+                    ? 2
+                    : ParseZoneLoadInt(_zoneLoadStartIntervalBox, "Starttakt in Sekunden", 1, 3);
             var selectedIdentityNumber = singleClientOnly
                 ? ParseZoneLoadInt(_zoneLoadSingleIdentityBox, "A-Identität", 1, credentialManifest.Clients.Count)
                 : 1;
             var priorityIdentityNumber = singleClientOnly
                 ? 0
                 : ParseZoneLoadInt(_zoneLoadPriorityIdentityBox, "B: zuerst #", 0, credentialManifest.Clients.Count);
-            var delayedZoneReentryAttempts = singleClientOnly
-                ? 0
+            var delayedZoneReentryAttempts = singleClientOnly || zone01Diagnostic
+                ? 0 // Strict first-admission failure investigation, no delayed retry masking.
                 : ParseZoneLoadInt(_zoneLoadDeferredZoneReentryBox, "B: Nachaufnahme", 0, 1);
             // Preserve the previously validated two-hour hold budget while extending it
             // for the extra wall time incurred by deliberate 2s/3s admission pacing.
@@ -911,6 +945,7 @@ public partial class MainWindow
             var options = new FiestaLoadRampOptions
             {
                 TargetZoneExePath = target,
+                Zone01Diagnostic = zone01Diagnostic,
                 CredentialManifestPath = credentials,
                 CredentialStartIndex = selectedIdentityNumber - 1,
                 PriorityCredentialNumber = priorityIdentityNumber,
@@ -933,16 +968,21 @@ public partial class MainWindow
                     StepTimeout = singleClientOnly ? TimeSpan.FromSeconds(15) : TimeSpan.FromSeconds(60),
                     ZoneLoginTimeout = singleClientOnly ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(90),
                     DelayedZoneReentryAttempts = delayedZoneReentryAttempts,
+                    RequiredZonePort = zone01Port,
                     HoldDuration = holdDuration
                 },
                 StageTargets = singleClientOnly
                     ? new[] { 1 }
-                    : FiestaLoadRampOptions.DiagnosticStageTargets,
+                    : zone01Diagnostic
+                        ? FiestaLoadRampOptions.Zone01DiagnosticStageTargets
+                        : FiestaLoadRampOptions.DiagnosticStageTargets,
                 ClientStartInterval = TimeSpan.FromSeconds(startIntervalSeconds),
                 StageReadyTimeout = singleClientOnly ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(3),
                 StageSettleTime = singleClientOnly ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(10),
                 SessionHoldDuration = holdDuration,
-                FinalStabilityDuration = TimeSpan.FromMinutes(5),
+                FinalStabilityDuration = zone01Diagnostic
+                    ? TimeSpan.FromMinutes(1)
+                    : TimeSpan.FromMinutes(5),
                 StabilityPollInterval = TimeSpan.FromSeconds(5)
             };
 
@@ -959,7 +999,11 @@ public partial class MainWindow
 
             SetZoneLoadStatus(singleClientOnly
                 ? $"1-Client-Probe für Credential #{selectedIdentityNumber} ({credentialManifest.Clients[selectedIdentityNumber - 1].Username}) läuft: Login → World → Zone → ShinePlayer + Log-Audit …"
-                : $"Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · " +
+                : zone01Diagnostic
+                    ? $"Zone01-DIAGNOSE (NICHT ZERTIFIZIERT): echtes Login→World→SH4/3 nur Port {zone01Port}, " +
+                      "bis zu 1100 Spieler mit 2-s Starttakt, keine verzögerte Nachaufnahme, " +
+                      "Zone01-only ShinePlayer-PDB-Messung und 1669-Debuggeraufzeichnung …"
+                    : $"Diagnose-Ramp läuft: 1 → 10 → 50 → 100 → danach 50er-Stufen bis 500, 100er-Stufen bis 1400 und Feinmessung um 1500/1600 · " +
                   $"{(priorityIdentityNumber == 0 ? "Standardreihenfolge" : $"DIAGNOSE-REIHENFOLGE (#{priorityIdentityNumber} zuerst, keine Baseline)")}" +
                   $" · {startIntervalSeconds}-s Starttakt · " +
                   $"{(delayedZoneReentryAttempts == 0 ? "reguläre Ramp ohne Nachaufnahme" : "DIAGNOSE-Nachaufnahme aktiv (20s, max. ein vollständiger Neuversuch)")}" +
