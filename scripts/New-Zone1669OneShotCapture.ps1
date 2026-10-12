@@ -88,11 +88,19 @@ if ($TemplateSelfTest) {
     # Regression: the $$>a< WinDbg runner joins all lines with semicolons.
     # The first .sympath+ then consumes the other debugger commands as paths.
     # Execute BOTH files line-by-line using $$< instead.
-    if ($armTemplate.Contains('$$>a<') -or
-        -not $armTemplate.Contains('bp /1 Zone+0x0005AE5A "$$<__HITPATH__"') -or
-        -not [regex]::IsMatch($armTemplate, '(?m)^\.sympath\+ __PDBDIR__\r?\n\.reload /f Zone\.exe$') -or
-        -not [regex]::IsMatch($onHitTemplate, '(?m)^\.logclose\r?\ngc$')) {
-        throw 'WinDbg capture must execute setup and first-hit scripts line-by-line ($$<).'
+    if ($armTemplate.Contains('$$>a<')) {
+        throw 'WinDbg setup must not use the collapsing $$>a< runner.'
+    }
+    if (-not $armTemplate.Contains('bp /1 Zone+0x0005AE5A "$$<__HITPATH__"')) {
+        throw 'WinDbg hit file must be run by the line-based $$< command.'
+    }
+    if (-not $armTemplate.Contains('.sympath+ __PDBDIR__') -or
+        -not $armTemplate.Contains('.reload /f Zone.exe')) {
+        throw 'Symbol search and reload commands missing from the setup file.'
+    }
+    if (-not $onHitTemplate.Contains('.logclose') -or
+        -not $onHitTemplate.TrimEnd().EndsWith('gc')) {
+        throw 'First-hit must close its log and resume the test zone.'
     }
     if (-not $onHitTemplate.Contains('FM_MARKING_RETURN=%x') -or
         -not $onHitTemplate.Contains('poi(@esi+0x66)') -or
