@@ -73,6 +73,56 @@ an `Zone.exe`.
 
 Microsoft-Dokumentation: [WinDbg-Skriptbefehle](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/-----------------------a---run-script-file-).
 
+## Zone01-Lastdiagnose im Server Manager (2026-10-12)
+
+Der Forschungsbranch bietet im Bereich **Player Load Verification** nun die separate
+Schaltfläche **`C · Zone01-Fehlerdiagnose 1 → 1100`**. Sie ist **keine**
+Zertifizierung und verändert den normalen **`B · Ramp 1 → 1600`** nicht.
+
+**Vorbereitung:**
+
+1. `Zone01\Zone.exe` aus der vorhandenen Serverinstallation oben als **Ziel** auswählen.
+   Die Zone darf während des Debugversuchs keine produktiven Spieler bedienen;
+   andere Zonen dürfen zwar laufen, werden aber niemals als Zone01 gezählt.
+2. Wie bisher das bestehende 1600er-Credential-Manifest, CH6/1-Template,
+   CH3/15-Profil sowie Login-/World-Werte verwenden. Keine Charaktere
+   während des Lasttests erstellen. Die UI fragt den Zone01-Client-Port aus dem
+   konfigurierten Dienst ab; **kein Port-Fallback**.
+3. Das bereits vorbereitete WinDbg x86 an den **genau identifizierten
+   Zone01-Prozess** anhängen. `lmvm Zone` und `bl` prüfen. Nur auf
+   dieser isolierten Testzone einmalig den Fehlerzweig-Breakpoint
+   `Zone+0x0005AE5A` scharfschalten.
+4. Den Button **C** ausführen und die Sicherheitsabfrage bestätigen.
+   Stufen bis **1100**, jeweils **2 Sekunden Starttakt**, keine zusätzliche
+   verzögerte Nachaufnahme; abschließende **60 Sekunden** Beobachtung.
+   Jede Stufe verlangt weiterhin zwei exakte ShinePlayer-Runtime-Samples.
+
+**Wichtige technische Grenzen:**
+
+- Die Original-Zone01 darf weiterhin das **Stock-Profil 1500/8000/256** haben.
+  Die Runtimebeobachtung prüft einen exakten `Zone01\Zone.exe`-Prozesspfad
+  und hash-gebundene originale ShineObjectManager-Zähler. Sie erlaubt andere
+  Zone-Prozesse, ohne deren Player mit Zone01 zu verwechseln.
+- **WorldManager entscheidet die Zielzone.** `SH4/3` wird weder übersprungen
+  noch umgeschrieben. Sobald dessen Port nicht zum konfigurierten Zone01-Port
+  passt, schlägt der Client **vor CH6/1** mit `ZONE01_ROUTE_MISMATCH` fehl.
+  Das weist auf Routing/Map-/Spawn-Konfiguration hin, nicht auf ein Problem
+  beim TCP-Retry. Bei abweichendem Redirect muss die serverseitige
+  Zonen-/Map-Zuordnung **separat und bewusst** für die Testumgebung geprüft
+  werden. Keine automatische Datenbank- oder ServerInfo-Manipulation.
+- Der Stock-Zone-Listener kann unabhängig vom ShinePlayer-Pool begrenzen;
+  ein früher Stufenabbruch ist kein Beweis, dass Fehler 1669 nicht existiert.
+  Die Modusgrenze 1100 ist ausdrücklich **kein** Kapazitätsnachweis.
+- WinDbg kann den Zielprozess kurz anhalten. Nicht gleichzeitig den offiziellen
+  1600er-Kapazitätsnachweis durchführen.
+- **Keine Garantie auf Treffer:** Die bisherigen 1669er wurden auf Zone00 bei
+  hohen Spielerzahlen beobachtet. Damit der Debugger trifft, muss der gleiche
+  serverseitige Bewegungs-/Marking-Fehler **auf Zone01** tatsächlich entstehen.
+- Ergebnisdateien: `player-ramp-trace-*.log`, Zone01-Assert-/CoordRepairLog
+  und beim ersten Breakpoint `C:\NextGenZone1669Capture\run-*\Zone1669_FirstHit_*.log`.
+  Die Ergebnisse sekundengenau vergleichen, bevor eine Root-Cause-Behauptung
+  oder ein Binary-Fix gemacht wird.
+
 ## Technische Grundlage
 
 - Original Zone.exe (x86): SHA-256 db1cb42912556a4ea5cde5c18f15f2495b81465c70ca9c18ad5bc7e36611aff5.
