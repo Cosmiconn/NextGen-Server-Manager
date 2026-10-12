@@ -73,7 +73,7 @@ lmvm Zone
 .echo Verify Zone image and PDB are loaded before continuing.
 .echo The next breakpoint is on the 1669 FAILURE BRANCH ONLY, not on all fm_Marking calls.
 u Zone+0x0005AE56 L8
-bp /1 Zone+0x0005AE5A "$<__HITPATH__"
+bp /1 Zone+0x0005AE5A "$$<__HITPATH__"
 bl
 g
 '@
@@ -85,14 +85,14 @@ if ($TemplateSelfTest) {
     if ($armTemplate.Contains('bp Zone+0x0005AE56')) {
         throw 'Hot-path breakpoint not permitted.'
     }
-    # Regression: $>a< condenses every script line into one semicolon-separated
-    # command block. The first .sympath+ then accidentally consumes ALL following
-    # commands as path components and NO breakpoint gets armed. $< is line-based.
-    if ($armTemplate.Contains('$>a<') -or
-        -not $armTemplate.Contains('bp /1 Zone+0x0005AE5A "$<__HITPATH__"') -or
-        -not $armTemplate.Contains(".sympath+ __PDBDIR__`n.reload /f Zone.exe") -or
-        -not $onHitTemplate.Contains(".logclose`ngc")) {
-        throw 'WinDbg multi-command scripts MUST use line-by-line $< for setup AND first-hit.'
+    # Regression: the $$>a< WinDbg runner joins all lines with semicolons.
+    # The first .sympath+ then consumes the other debugger commands as paths.
+    # Execute BOTH files line-by-line using $$< instead.
+    if ($armTemplate.Contains('$$>a<') -or
+        -not $armTemplate.Contains('bp /1 Zone+0x0005AE5A "$$<__HITPATH__"') -or
+        -not [regex]::IsMatch($armTemplate, '(?m)^\.sympath\+ __PDBDIR__\r?\n\.reload /f Zone\.exe$') -or
+        -not [regex]::IsMatch($onHitTemplate, '(?m)^\.logclose\r?\ngc$')) {
+        throw 'WinDbg capture must execute setup and first-hit scripts line-by-line ($$<).'
     }
     if (-not $onHitTemplate.Contains('FM_MARKING_RETURN=%x') -or
         -not $onHitTemplate.Contains('poi(@esi+0x66)') -or
@@ -228,7 +228,7 @@ Write-Output "Zone.exe RSDS GUID/Age: $expectedGuid / $expectedAge"
 Write-Output "PDB verified (GUID/Age = original; check live symbol load in WinDbg): $pdb"
 Write-Output "Failure-only breakpoint: Zone+$failureRva (one-shot)"
 Write-Output "WinDbg (x86) command to run AFTER attaching to the ISOLATED TEST Zone.exe:"
-Write-Output ('  $<' + $armPath)
+Write-Output ('  $$<' + $armPath)
 Write-Output "Expected first-hit log: $logPath (WinDbg .logopen /t appends PID/time)"
 Write-Output 'Use lmvm Zone to verify the loaded image/PDB; do NOT attach to the primary benchmark Zone.'
 Write-Output 'The one-shot breakpoint will auto-resume. Captures call stack and runtime addresses; review before sharing.'
