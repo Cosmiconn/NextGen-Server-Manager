@@ -81,7 +81,7 @@ Wenn die Listener-Wiederherstellung scheitert, kompensiert der Manager den Binä
 - Die alten `nextgen-prepatch.bak`, `nextgen-deployment.json`, `nextgen-rollback-patched*.bak`, Listener-Backups/-Manifeste und temporäre Audit-Historie werden weder blind entfernt noch überschrieben.
 - Stock `ShinePlayer=1500`, `ShineMob=8000`, `ShineNPC=256`; zertifizierter Patch `2000/12000/512`. Zone00-C-Modus ist aus Vorsicht auf **1100** Clients begrenzt und dadurch **kein** 1600er-Zertifikat.
 - Der Standard-Ramp B bewahrt den bisherigen zertifizierten Runtime-Observer und Listenerpreflight.
-- Original-WorldRedirect `SH4/3` wird niemals überschrieben; ein abweichender Port ergibt `ZONE01_ROUTE_MISMATCH` (historische technische Meldung, obwohl der Guard inzwischen auch Zone00 unterstützt), **vor** dem Zone-Transfer.
+- Original-WorldRedirect `SH4/3` wird niemals überschrieben; ein abweichender Port ergibt `ZONE_ROUTE_MISMATCH`, **vor** dem Zone-Transfer.
 - Der einmalige WinDbg-Hit belegt die tatsächlichen Rückgabewerte/Koordinaten des untersuchten Pfads, nicht automatisch die Ursache aller vorherigen Lastfehler.
 
 Weiterführend: [ZONE1669_RUNTIME_CAPTURE.md](ZONE1669_RUNTIME_CAPTURE.md), [ZONE1669_SYMBOL_ANALYSIS.md](ZONE1669_SYMBOL_ANALYSIS.md), [SCALING_AND_PROVISIONING.md](SCALING_AND_PROVISIONING.md).
