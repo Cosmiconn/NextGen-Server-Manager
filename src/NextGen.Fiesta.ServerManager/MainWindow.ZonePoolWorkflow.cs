@@ -1450,8 +1450,15 @@ public partial class MainWindow
                 target, ZoneClientListenerTestConfiguration.ReapplyConfirmationToken);
             if (!listener.Success)
             {
-                // Compensate a partial restore without silently leaving a new binary
-                // installed in the Stock/1500 test setup.
+                // Never restore Stock binary under a Listener 2000 configuration.
+                // The listener transaction must have fully compensated its own
+                // ServerInfo write before the binary compensation is safe.
+                if (!IsZoneListenerStock(target, out var listenerStatus))
+                    throw new InvalidOperationException(
+                        "Listener-Reapply FEHLER: " + listener.Detail +
+                        " · ServerInfo ist NICHT verifiziert Stock: " + listenerStatus +
+                        " · Keinen Server starten; manueller Audit erforderlich.");
+
                 var undo = deployment.Rollback(
                     target, ZonePoolSingleZoneTestDeployment.RollbackConfirmationToken);
                 throw new InvalidOperationException(
