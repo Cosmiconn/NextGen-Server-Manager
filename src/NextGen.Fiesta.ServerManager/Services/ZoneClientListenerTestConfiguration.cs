@@ -17,6 +17,7 @@ public sealed class ZoneClientListenerTestConfiguration
 {
     public const string ApplyConfirmationToken = "ENABLE-CERTIFIED-ZONE-LISTENER-2000";
     public const string RollbackConfirmationToken = "ROLLBACK-CERTIFIED-ZONE-LISTENER-TEST";
+    public const string ReapplyConfirmationToken = "REAPPLY-CERTIFIED-ZONE-LISTENER-2000";
     public const int StockMaxAccept = 1500;
     public const int CertifiedMaxAccept = 2000;
 
@@ -164,12 +165,11 @@ public sealed class ZoneClientListenerTestConfiguration
         var backupPath = GetBackupPath(serverInfoPath);
         var manifestPath = GetManifestPath(serverInfoPath);
         var appliedAuditBackupPath = GetAppliedAuditBackupPath(serverInfoPath);
+        if (File.Exists(appliedAuditBackupPath))
+            appliedAuditBackupPath = serverInfoPath + ".nextgen-zone-listener-rollback-applied-" + Guid.NewGuid().ToString("N") + ".bak";
 
         if (!File.Exists(serverInfoPath) || !File.Exists(backupPath) || !File.Exists(manifestPath))
             return Failed("Listener-ServerInfo, Backup oder Manifest fehlt. Automatischer Rollback wird verweigert.");
-        if (File.Exists(appliedAuditBackupPath))
-            return Failed("Listener-Rollback-Auditbackup existiert bereits; automatisches Überschreiben wird verweigert.");
-
         ZoneClientListenerConfigurationMetadata? manifest;
         try
         {
@@ -277,6 +277,139 @@ public sealed class ZoneClientListenerTestConfiguration
             SafeDelete(stagePath);
             SafeDelete(manifestTemp);
             return Failed("Listener-Rollback fehlgeschlagen: " + ex.Message, serverInfoPath: serverInfoPath, backupPath: backupPath, manifestPath: manifestPath);
+        }
+    }
+
+
+    /// <summary>
+    /// Reapply the exact, independently recorded 2000-listener version after
+    /// a rollback without deleting any previous backup or changing other Zone rows.
+    /// Strict prerequisite: matching certified Zone binary has been redeployed.
+    /// </summary>
+    public ZoneClientListenerConfigurationResult ReapplyRolledBack(
+        string targetZoneExePath, string confirmationToken)
+    {
+        if (confirmationToken != ReapplyConfirmationToken)
+            return Failed("Listener-Reapply-Bestätigung fehlt.");
+        if (!TryResolvePaths(targetZoneExePath, out var zone, out var info, out var zoneNo, out var error))
+            return Failed(error);
+        var backup = GetBackupPath(info);
+        var record = GetManifestPath(info);
+        if (!File.Exists(zone) || !File.Exists(info) || !File.Exists(backup) || !File.Exists(record))
+            return Failed("Zone-Binary/ServerInfo/Listener-Backup oder Manifest fehlen.");
+
+        ZoneClientListenerConfigurationMetadata? metadata;
+        try { metadata = JsonSerializer.Deserialize<ZoneClientListenerConfigurationMetadata>(File.ReadAllBytes(record)); }
+        catch (Exception ex) { return Failed("Listener-Manifest nicht lesbar: " + ex.Message); }
+
+        var audit = metadata?.AppliedAuditBackupPath;
+        if (metadata is null || metadata.FormatVersion != 1 || metadata.State != "ROLLED_BACK"
+            || !PathEquals(metadata.ServerInfoPath, info) || !PathEquals(metadata.BackupPath, backup)
+            || !PathEquals(metadata.TargetZoneExePath, zone)
+            || metadata.ZoneNo != zoneNo || metadata.OldMaxAccept != StockMaxAccept
+            || metadata.NewMaxAccept != CertifiedMaxAccept
+            || metadata.CertifiedZoneSha256 != ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256
+            || string.IsNullOrWhiteSpace(audit)
+            || !Path.GetFullPath(audit).StartsWith(GetAppliedAuditBackupPath(info).Replace(".bak", ""), StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(audit))
+            return Failed("Listener ROLLED_BACK-Manifest und Auditbackup passen nicht zum geprüften Ziel.");
+
+        var deployed = ValidateDeploymentMetadata(zone);
+        if (deployed is not null)
+            return Failed("Zone00-Binary ist noch nicht zertifiziert wiederhergestellt: " + deployed);
+        if (Sha256File(zone) != ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256
+            || Sha256File(info) != metadata.OriginalSha256
+            || Sha256File(backup) != metadata.OriginalSha256
+            || Sha256File(audit) != metadata.AppliedSha256)
+            return Failed("Listener-/Backup-/Audit-Hashes oder zertifiziertes Zone-Binary stimmen nicht.");
+
+        var originalEntries = _parser.Parse(info);
+        var candidates = originalEntries.Where(e =>
+            e.ServerType == ZoneServerType && e.ZoneNo == zoneNo &&
+            e.ConnectionKind == ZoneClientConnectionKind &&
+            e.Name.Equals(metadata.TargetEntryName, StringComparison.OrdinalIgnoreCase) &&
+            e.WorldNo == metadata.WorldNo).ToArray();
+        if (candidates.Length != 1 || candidates[0].MaxAccept != StockMaxAccept)
+            return Failed("ServerInfo-Zielzeile ist nicht eindeutig im Stock-Zustand.");
+
+        var processes = FindRunningZoneProcesses();
+        if (!processes.ProcessEnumerationTrusted || processes.ProcessIds.Count != 0)
+            return Failed("Listener-Reapply erfordert: alle Zone-Prozesse gestoppt.");
+
+        var stage = info + ".nextgen-listener-reapply-stage-" + Guid.NewGuid().ToString("N");
+        var stockHistory = info + ".nextgen-listener-reapply-stock-" + Guid.NewGuid().ToString("N") + ".bak";
+        var jsonTemp = record + ".tmp-" + Guid.NewGuid().ToString("N");
+        var jsonHistory = record + ".audit-" + Guid.NewGuid().ToString("N") + ".json";
+        var replaced = false;
+        try
+        {
+            WriteDurable(stage, File.ReadAllBytes(audit));
+            if (Sha256File(stage) != metadata.AppliedSha256 || Sha256File(info) != metadata.OriginalSha256)
+                throw new IOException("ServerInfo änderte sich beim Listener-Reapply.");
+            ValidateOnlyExpectedEntryChanged(info, stage, candidates[0], CertifiedMaxAccept);
+            processes = FindRunningZoneProcesses();
+            if (!processes.ProcessEnumerationTrusted || processes.ProcessIds.Count != 0)
+                throw new IOException("Zone-Prozess wurde während des Listener-Stagings gestartet.");
+            if (Sha256File(zone) != ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256
+                || ValidateDeploymentMetadata(zone) is not null)
+                throw new IOException("Zertifizierter Zone-Binaryzustand hat sich verändert.");
+
+            File.Replace(stage, info, stockHistory, ignoreMetadataErrors: false);
+            replaced = true;
+            if (Sha256File(info) != metadata.AppliedSha256 || Sha256File(stockHistory) != metadata.OriginalSha256)
+                throw new IOException("Reapply ServerInfo oder historisches Stock-Backup stimmt nicht.");
+
+            var deployedMetadata = new ZoneClientListenerConfigurationMetadata
+            {
+                FormatVersion = metadata.FormatVersion,
+                State = "DEPLOYED",
+                AppliedUtc = DateTimeOffset.UtcNow,
+                ServerInfoPath = metadata.ServerInfoPath,
+                BackupPath = metadata.BackupPath,
+                AppliedAuditBackupPath = metadata.AppliedAuditBackupPath,
+                TargetZoneExePath = metadata.TargetZoneExePath,
+                TargetEntryName = metadata.TargetEntryName,
+                WorldNo = metadata.WorldNo,
+                ZoneNo = metadata.ZoneNo,
+                OldMaxAccept = metadata.OldMaxAccept,
+                NewMaxAccept = metadata.NewMaxAccept,
+                OriginalSha256 = metadata.OriginalSha256,
+                AppliedSha256 = metadata.AppliedSha256,
+                CertifiedZoneSha256 = metadata.CertifiedZoneSha256
+            };
+            WriteJsonDurable(jsonTemp, deployedMetadata);
+            File.Replace(jsonTemp, record, jsonHistory, ignoreMetadataErrors: false);
+            var confirmed = VerifyApplied(zone);
+            if (!confirmed.Verified)
+                throw new IOException("Listener-Reapply konnte nicht abschließend verifiziert werden: " + confirmed.Detail);
+            return new ZoneClientListenerConfigurationResult
+            {
+                Success = true,
+                Applied = true,
+                ServerInfoPath = info,
+                BackupPath = backup,
+                ManifestPath = record,
+                AppliedAuditBackupPath = audit,
+                OriginalSha256 = metadata.OriginalSha256,
+                AppliedSha256 = metadata.AppliedSha256,
+                Detail = "LISTENER REAPPLY SUCCESS: Nur Zone " + zoneNo +
+                         " auf 2000; alle übrigen ServerInfo-Zeilen unverändert. " +
+                         "Stock-/Patch-Audits und Manifest-Historie erhalten."
+            };
+        }
+        catch (Exception ex)
+        {
+            var emergency = replaced
+                ? TryEmergencyRollback(info, backup, metadata.OriginalSha256)
+                : new EmergencyRollbackResult(false, "ServerInfo nicht ausgetauscht.");
+            return Failed("LISTENER REAPPLY FEHLER: " + ex.Message + " " + emergency.Detail,
+                emergencyRollbackAttempted: replaced, emergencyRollbackSucceeded: emergency.Success,
+                serverInfoPath: info, backupPath: backup, manifestPath: record);
+        }
+        finally
+        {
+            SafeDelete(stage);
+            SafeDelete(jsonTemp);
         }
     }
 
