@@ -4,7 +4,7 @@ using NextGen.Fiesta.ServerManager.Models;
 namespace NextGen.Fiesta.ServerManager.Services;
 
 /// <summary>
-/// Read-only, deliberately NON-CERTIFYING original-NA2016 Zone01 debugger observer.
+/// Read-only, deliberately NON-CERTIFYING original-NA2016 Zone00/Zone01 debugger observer.
 /// Unlike ZonePoolRuntimeTestObserver, this accepts the hash-pinned stock Zone.exe
 /// and allows other zones to run. It never modifies server files or process memory.
 /// </summary>
@@ -14,20 +14,23 @@ internal sealed class ZoneLocalDiagnosticObserver
 
     public ZonePoolRuntimeTestObservation Observe(
         string targetZoneExePath,
+        string requiredFolder = "Zone01",
         int? expectedProcessId = null,
         DateTime? expectedStartUtc = null)
     {
+        if (requiredFolder is not ("Zone00" or "Zone01"))
+            return Blocked("Unbekannte Diagnosezone.");
         if (string.IsNullOrWhiteSpace(targetZoneExePath) || !File.Exists(targetZoneExePath))
-            return Blocked("Zone01-EXE wurde nicht gefunden.");
+            return Blocked("Testzonen-EXE wurde nicht gefunden.");
 
         string target;
         try { target = Path.GetFullPath(targetZoneExePath); }
-        catch (Exception ex) { return Blocked("Ungültiger Zone01-Pfad: " + ex.Message); }
+        catch (Exception ex) { return Blocked("Ungültiger Testzonen-Pfad: " + ex.Message); }
 
         if (!string.Equals(Path.GetFileName(Path.GetDirectoryName(target)),
-                "Zone01", StringComparison.OrdinalIgnoreCase)
+                requiredFolder, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(Path.GetFileName(target), "Zone.exe", StringComparison.OrdinalIgnoreCase))
-            return Blocked("Dieser isolierte Diagnosemodus erlaubt ausschließlich Zone01\\Zone.exe.");
+            return Blocked($"Dieser Diagnosemodus erlaubt nur {requiredFolder}\\Zone.exe.");
 
         try
         {
@@ -48,7 +51,7 @@ internal sealed class ZoneLocalDiagnosticObserver
             }
 
             if (matches.Count != 1)
-                return Blocked($"Zone01-Prozess nicht eindeutig: {matches.Count} exakte Instanz(en) von {target}.", target);
+                return Blocked($"Testzonen-Prozess nicht eindeutig: {matches.Count} exakte Instanz(en) von {target}.", target);
             var (pid, started) = matches[0];
             if (expectedProcessId.HasValue && (pid != expectedProcessId.Value
                 || (expectedStartUtc.HasValue && started != expectedStartUtc.Value)))
@@ -56,8 +59,8 @@ internal sealed class ZoneLocalDiagnosticObserver
 
             var zone = new FiestaServiceEntry
             {
-                DisplayName = "Zone01 Diagnostic",
-                ServiceName = "_Zone01Diagnostic",
+                DisplayName = requiredFolder + " Diagnostic",
+                ServiceName = "_ZoneLocalDiagnostic",
                 Kind = FiestaServiceKind.Zone,
                 DirectoryPath = Path.GetDirectoryName(target) ?? string.Empty,
                 ExecutablePath = target,
@@ -67,7 +70,7 @@ internal sealed class ZoneLocalDiagnosticObserver
             };
             var pool = _poolProbe.Read(zone);
             if (!pool.RuntimeVerified)
-                return Blocked("Zone01 ShinePlayer-Runtimeprobe fehlgeschlagen: " + pool.Detail, target);
+                return Blocked("Testzonen-ShinePlayer-Runtimeprobe fehlgeschlagen: " + pool.Detail, target);
             return new ZonePoolRuntimeTestObservation
             {
                 Passed = true,
@@ -77,14 +80,14 @@ internal sealed class ZoneLocalDiagnosticObserver
                 ProcessStartedUtc = started,
                 TargetSha256 = pool.BinarySha256,
                 Pools = pool,
-                Detail = $"NICHT ZERTIFIZIEREND · Zone01 PID {pid}, Original-/Patch-Hash geprüft; " +
+                Detail = $"NICHT ZERTIFIZIEREND · {requiredFolder} PID {pid}, Original-/Patch-Hash geprüft; " +
                          $"ShinePlayer {pool.PlayerCount:N0}/{pool.PlayerLimit:N0}. " +
-                         "Andere Zonen dürfen laufen, gezählt wird ausschließlich diese Zone01."
+                         "Andere Zonen dürfen laufen, gezählt wird ausschließlich {requiredFolder}."
             };
         }
         catch (Exception ex)
         {
-            return Blocked("Zone01-Prozessinventar nicht verifizierbar: " + ex.Message, target);
+            return Blocked("Testzonen-Prozessinventar nicht verifizierbar: " + ex.Message, target);
         }
     }
 
