@@ -28,14 +28,15 @@ function Resolve-ManagerAssembly {
 $zonePath = (Resolve-Path -LiteralPath $ZoneExe).Path
 $assemblyPath = Resolve-ManagerAssembly -ExplicitPath $ManagerAssembly
 
-Write-Host 'NextGen Zone Pool - isolierter Deployment/Rollback End-to-End-Selbsttest'
+Write-Host 'NextGen Zone Pool - TEMP End-to-End Stock -> Patch -> Stock -> Repatch -> Stock inklusive Listener'
 Write-Host "Baseline: $zonePath"
 Write-Host ''
 Write-Host 'WICHTIG:'
 Write-Host '- kein Zone-Prozess darf laufen'
 Write-Host '- die angegebene Zone.exe wird nur gelesen und niemals ersetzt'
 Write-Host '- alle Schreibvorgaenge finden in einem frischen TEMP-Verzeichnis statt'
-Write-Host '- der Test erzeugt Patchkopie, deployt auf eine TEMP-Zielkopie und rollt diese wieder zurueck'
+Write-Host '- testet 2000/12000/512 Binary, Zone00-Listener 1500/2000 und zwei Rollback-Zyklen'
+Write-Host '- alle Backups und SHA-256-Pruefungen werden im TEMP-Verzeichnis ausgefuehrt'
 Write-Host ''
 
 $assemblyDirectory = Split-Path -Parent $assemblyPath
