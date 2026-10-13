@@ -13,6 +13,7 @@ public sealed class ZonePoolSingleZoneTestDeployment
 {
     public const string DeploymentConfirmationToken = "DEPLOY-CERTIFIED-ZONE-POOL-2000-12000-512";
     public const string RollbackConfirmationToken = "ROLLBACK-CERTIFIED-ZONE-POOL-TEST";
+    public const string ReapplyConfirmationToken = "REAPPLY-CERTIFIED-ZONE-POOL-2000-12000-512";
 
     private readonly ZonePoolDeploymentPreflight _preflight = new();
     private readonly ZonePoolPatchedCopyVerifier _patchedCopyVerifier = new();
@@ -156,12 +157,11 @@ public sealed class ZonePoolSingleZoneTestDeployment
         var backup = target + ".nextgen-prepatch.bak";
         var record = target + ".nextgen-deployment.json";
         var patchedAuditBackup = target + ".nextgen-rollback-patched.bak";
+        if (File.Exists(patchedAuditBackup))
+            patchedAuditBackup = target + ".nextgen-rollback-patched-" + Guid.NewGuid().ToString("N") + ".bak";
 
         if (!File.Exists(backup) || !File.Exists(record))
             return Failed("Deployment-Backup oder Deployment-Metadaten fehlen. Automatischer Rollback wird verweigert.");
-        if (File.Exists(patchedAuditBackup))
-            return Failed("Rollback-Auditbackup existiert bereits; automatisches Überschreiben wird verweigert.");
-
         ZonePoolSingleZoneDeploymentMetadata? metadata;
         try
         {
@@ -269,6 +269,129 @@ public sealed class ZonePoolSingleZoneTestDeployment
             SafeDelete(stage);
             SafeDelete(recordTemp);
             return Failed("Rollback fehlgeschlagen: " + ex.Message, targetPath: target, backupPath: backup, recordPath: record);
+        }
+    }
+
+
+    /// <summary>
+    /// Restore the EXACT certified executable after a registered ROLLED_BACK cycle.
+    /// Does not delete/overwrite prior audit files; maintains the original baseline
+    /// backup and records the new deployed state for the existing strict runtime observer.
+    /// Requires ALL Zone processes to be stopped.
+    /// </summary>
+    public ZonePoolSingleZoneTestDeploymentResult ReapplyRolledBack(
+        string targetZoneExePath, string confirmationToken)
+    {
+        if (confirmationToken != ReapplyConfirmationToken)
+            return Failed("Expliziter Wiederherstellungs-Token fehlt. Nichts geändert.");
+        if (string.IsNullOrWhiteSpace(targetZoneExePath) || !File.Exists(targetZoneExePath))
+            return Failed("Zone.exe wurde nicht gefunden.");
+
+        var target = Path.GetFullPath(targetZoneExePath);
+        var backup = target + ".nextgen-prepatch.bak";
+        var record = target + ".nextgen-deployment.json";
+        if (!File.Exists(backup) || !File.Exists(record))
+            return Failed("Verifiziertes Original-Backup oder Deployment-Record fehlen.");
+
+        ZonePoolSingleZoneDeploymentMetadata? metadata;
+        try { metadata = JsonSerializer.Deserialize<ZonePoolSingleZoneDeploymentMetadata>(File.ReadAllBytes(record)); }
+        catch (Exception ex) { return Failed("Deployment-Record nicht lesbar: " + ex.Message); }
+
+        var audit = metadata?.RollbackPatchedBackupPath;
+        if (metadata is null || metadata.FormatVersion != 1 || metadata.State != "ROLLED_BACK"
+            || !PathEquals(metadata.TargetPath, target)
+            || !PathEquals(metadata.BackupPath, backup)
+            || string.IsNullOrWhiteSpace(audit)
+            || !Path.GetFullPath(audit).StartsWith(target + ".nextgen-rollback-patched", StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(audit)
+            || metadata.VerifiedSiteCount != 83
+            || metadata.PlayerCapacity != ZonePoolOfflineWriterSelfTest.PlayerTarget
+            || metadata.MobCapacity != ZonePoolOfflineWriterSelfTest.MobTarget
+            || metadata.NpcCapacity != ZonePoolOfflineWriterSelfTest.NpcTarget
+            || !metadata.BaselineSha256.Equals(ZonePoolOfflineWriterSelfTest.ExpectedBaselineSha256, StringComparison.OrdinalIgnoreCase)
+            || !metadata.PatchedSha256.Equals(ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256, StringComparison.OrdinalIgnoreCase))
+            return Failed("ROLLED_BACK-Record, Patch-Auditbackup oder Zielpfad passen nicht zum zertifizierten Test.");
+
+        var baseline = ZonePoolOfflineWriterSelfTest.ExpectedBaselineSha256;
+        var patched = ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256;
+        if (Sha256File(target) != baseline || Sha256File(backup) != baseline
+            || Sha256File(audit) != patched)
+            return Failed("Original-Zone, Baseline-Backup oder Patch-Auditbackup haben falsche Hashes.");
+
+        var verification = _patchedCopyVerifier.Verify(audit);
+        if (!verification.Success || verification.VerifiedSiteCount != 83
+            || !verification.PatchedSha256.Equals(patched, StringComparison.OrdinalIgnoreCase))
+            return Failed("Audit-Patch bestand die unabhängige 83-Site-Prüfung nicht: " + verification.Detail);
+
+        var processes = FindRunningZoneProcesses();
+        if (!processes.ProcessEnumerationTrusted || processes.ProcessIds.Count != 0)
+            return Failed("Wiederherstellung blockiert: Alle Zone-Prozesse müssen beendet und prüfbar sein.");
+
+        var stage = target + ".nextgen-reapply-stage-" + Guid.NewGuid().ToString("N");
+        var stockAudit = target + ".nextgen-reapply-stock-" + Guid.NewGuid().ToString("N") + ".bak";
+        var recordTemp = record + ".tmp-" + Guid.NewGuid().ToString("N");
+        var recordHistory = record + ".audit-" + Guid.NewGuid().ToString("N") + ".json";
+        var replaced = false;
+        try
+        {
+            WriteDurable(stage, File.ReadAllBytes(audit));
+            if (Sha256File(stage) != patched || Sha256File(target) != baseline)
+                throw new IOException("Binary änderte sich nach dem Hash-Preflight.");
+            processes = FindRunningZoneProcesses();
+            if (!processes.ProcessEnumerationTrusted || processes.ProcessIds.Count != 0)
+                throw new IOException("Zone-Prozess ist während des Stagings gestartet.");
+
+            // Preserve this cycle's stock state separately. Never overwrite backup/history.
+            File.Replace(stage, target, stockAudit, ignoreMetadataErrors: false);
+            replaced = true;
+            if (Sha256File(target) != patched || Sha256File(stockAudit) != baseline)
+                throw new IOException("Nach dem Austausch stimmen Ziel-/Stock-Audithashes nicht.");
+
+            var restoredMetadata = new ZonePoolSingleZoneDeploymentMetadata
+            {
+                FormatVersion = metadata.FormatVersion,
+                State = "DEPLOYED",
+                DeployedUtc = DateTimeOffset.UtcNow,
+                TargetPath = metadata.TargetPath,
+                PatchSourcePath = metadata.PatchSourcePath,
+                BackupPath = metadata.BackupPath,
+                RollbackPatchedBackupPath = metadata.RollbackPatchedBackupPath,
+                BaselineSha256 = metadata.BaselineSha256,
+                PatchedSha256 = metadata.PatchedSha256,
+                VerifiedSiteCount = metadata.VerifiedSiteCount,
+                PlayerCapacity = metadata.PlayerCapacity,
+                MobCapacity = metadata.MobCapacity,
+                NpcCapacity = metadata.NpcCapacity
+            };
+            WriteJsonDurable(recordTemp, restoredMetadata);
+            File.Replace(recordTemp, record, recordHistory, ignoreMetadataErrors: false);
+            return new ZonePoolSingleZoneTestDeploymentResult
+            {
+                Success = true,
+                Deployed = true,
+                TargetPath = target,
+                BackupPath = backup,
+                DeploymentRecordPath = record,
+                RollbackPatchedBackupPath = audit,
+                TargetSha256 = patched,
+                BackupSha256 = baseline,
+                Detail = "REAPPLY SUCCESS: zertifizierte Zone.exe 2000/12000/512 bytegenau wiederhergestellt. " +
+                         "Original, Patch-Audit, Stock-Zwischenbackup und Record-Historie erhalten. " +
+                         "Listener muss danach separat wieder auf 2000 gesetzt werden."
+            };
+        }
+        catch (Exception ex)
+        {
+            var emergency = replaced ? TryEmergencyRollback(target, backup) : new EmergencyRollbackResult(false, "Binary nicht ausgetauscht.");
+            return Failed("REAPPLY fehlgeschlagen: " + ex.Message + " " + emergency.Detail,
+                emergencyRollbackAttempted: replaced,
+                emergencyRollbackSucceeded: emergency.Success,
+                targetPath: target, backupPath: backup, recordPath: record);
+        }
+        finally
+        {
+            SafeDelete(stage);
+            SafeDelete(recordTemp);
         }
     }
 
