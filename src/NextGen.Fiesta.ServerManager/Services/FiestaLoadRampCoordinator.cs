@@ -28,19 +28,21 @@ public sealed class FiestaLoadRampCoordinator
                 "Credential-Preflight: " + credentialCompatibility);
         }
 
+        var localDiagnostic = options.Zone00Diagnostic || options.Zone01Diagnostic;
+        var requiredFolder = options.Zone00Diagnostic ? "Zone00" : "Zone01";
         var targets = options.StageTargets
             .Distinct()
             .OrderBy(x => x)
             .ToArray();
 
         var finalTarget = targets[^1];
-        var targetLimit = options.Zone01Diagnostic
+        var targetLimit = localDiagnostic
             ? FiestaLoadRampOptions.Zone01DiagnosticMaximumClients
             : ZonePoolOfflineWriterSelfTest.PlayerTarget;
         if (finalTarget > targetLimit)
             return FiestaLoadRampResult.CreateBlocked(
                 $"Ziel {finalTarget:N0} überschreitet das erlaubte " +
-                $"{(options.Zone01Diagnostic ? "Zone01-Diagnosemaximum" : "zertifizierte ShinePlayer-Maximum")} " +
+                $"{(localDiagnostic ? "Zone01-Diagnosemaximum" : "zertifizierte ShinePlayer-Maximum")} " +
                 $"{targetLimit:N0}.");
 
         if (options.PriorityCredentialNumber > credentials.Clients.Count)
@@ -64,12 +66,12 @@ public sealed class FiestaLoadRampCoordinator
         // The canonical 1600 admission proof retains ALL original certification gates.
         // The separate Zone01 debugger ramp is read-only/non-certifying and accepts
         // an unmodified hash-pinned NA2016 Zone.exe with other Zone processes running.
-        var localObserver = options.Zone01Diagnostic ? new ZoneLocalDiagnosticObserver() : null;
+        var localObserver = localDiagnostic ? new ZoneLocalDiagnosticObserver() : null;
         int? baselinePid = null;
         DateTime? baselineStartUtc = null;
         ZonePoolRuntimeTestObservation ObserveZone()
-            => options.Zone01Diagnostic
-                ? localObserver!.Observe(options.TargetZoneExePath, baselinePid, baselineStartUtc)
+            => localDiagnostic
+                ? localObserver!.Observe(options.TargetZoneExePath, requiredFolder, baselinePid, baselineStartUtc)
                 : _runtimeObserver.Observe(options.TargetZoneExePath, minimumUptimeSeconds: 0);
 
         var baseline = ObserveZone();
@@ -79,17 +81,17 @@ public sealed class FiestaLoadRampCoordinator
         baselinePid = baseline.ProcessId;
         baselineStartUtc = baseline.ProcessStartedUtc;
 
-        if (!options.Zone01Diagnostic &&
+        if (!localDiagnostic &&
             baseline.Pools.PlayerLimit != ZonePoolOfflineWriterSelfTest.PlayerTarget)
             return FiestaLoadRampResult.CreateBlocked(
                 $"Runtime ShinePlayer-Limit ist {baseline.Pools.PlayerLimit:N0} statt {ZonePoolOfflineWriterSelfTest.PlayerTarget:N0}.");
-        if (options.Zone01Diagnostic && finalTarget > baseline.Pools.PlayerLimit)
+        if (localDiagnostic && finalTarget > baseline.Pools.PlayerLimit)
             return FiestaLoadRampResult.CreateBlocked(
-                $"Zone01 Original-Pool hat {baseline.Pools.PlayerLimit:N0} Plätze; " +
+                $"{requiredFolder} Pool hat {baseline.Pools.PlayerLimit:N0} Plätze; " +
                 $"Diagnoseziel {finalTarget:N0} passt nicht in diesen Pool.");
 
         int listenerMax = 0;
-        if (!options.Zone01Diagnostic)
+        if (!localDiagnostic)
         {
             var listener = new ZoneClientListenerTestConfiguration().VerifyApplied(options.TargetZoneExePath);
             if (!listener.Verified || listener.MaxAccept != ZoneClientListenerTestConfiguration.CertifiedMaxAccept)
@@ -148,9 +150,9 @@ public sealed class FiestaLoadRampCoordinator
         Trace("BASELINE",
             $"CredentialStartIndex={options.CredentialStartIndex}; PriorityCredentialNumber={options.PriorityCredentialNumber}; " +
             $"ZonePlayer={baselinePlayers}; PoolLimit={baseline.Pools.PlayerLimit}; " +
-            $"Mode={(options.Zone01Diagnostic ? "ZONE01_NON_CERTIFYING_DEBUG" : "CERTIFIED_1600")}; " +
+            $"Mode={(localDiagnostic ? "LOCAL_NON_CERTIFYING_DEBUG" : "CERTIFIED_1600")}; " +
             $"ExpectedZonePort={options.ClientOptions.RequiredZonePort?.ToString() ?? "<world-directed>"}; " +
-            $"Listener={(options.Zone01Diagnostic ? "<non-certified>" : listenerMax.ToString())}; " +
+            $"Listener={(localDiagnostic ? "<non-certified>" : listenerMax.ToString())}; " +
             $"DelayedZoneReentryAttempts={options.ClientOptions.DelayedZoneReentryAttempts}; " +
             $"StageTargets={string.Join(",", targets)}; " +
             $"StartIntervalMs={options.ClientStartInterval.TotalMilliseconds:N0}; HoldSec={options.SessionHoldDuration.TotalSeconds:N0}");
@@ -159,8 +161,8 @@ public sealed class FiestaLoadRampCoordinator
             0,
             0,
             baselinePlayers,
-            options.Zone01Diagnostic
-                ? $"Zone01 DEBUG (nicht zertifizierend) · PID {baselinePid} · Player={baselinePlayers:N0}, Limit={baseline.Pools.PlayerLimit:N0} · SH4/3 muss Port {options.ClientOptions.RequiredZonePort} liefern."
+            localDiagnostic
+                ? $"{requiredFolder} DEBUG (nicht zertifizierend) · PID {baselinePid} · Player={baselinePlayers:N0}, Limit={baseline.Pools.PlayerLimit:N0} · SH4/3 muss Port {options.ClientOptions.RequiredZonePort} liefern."
                 : $"Baseline Player={baselinePlayers:N0}, Limit={baseline.Pools.PlayerLimit:N0} · Listener {listenerMax:N0} verifiziert."));
 
         try
@@ -489,7 +491,7 @@ public sealed class FiestaLoadRampCoordinator
                 }
             }
 
-            Trace(options.Zone01Diagnostic ? "ZONE01-DIAGNOSTIC-PASS" : "RAMP-PASS",
+            Trace(localDiagnostic ? "LOCAL-DIAGNOSTIC-PASS" : "RAMP-PASS",
                 $"FinalReady={ready.Count}; Target={finalTarget}; Stages={stageResults.Count}; " +
                 $"DeferredZoneReentries={deferredZoneAdmissions.Count}; " +
                 $"DiagnosticMode={options.ClientOptions.DelayedZoneReentryAttempts > 0}");
@@ -502,7 +504,7 @@ public sealed class FiestaLoadRampCoordinator
                 FinalExpectedPlayers = baselinePlayers + finalTarget,
                 StageResults = stageResults,
                 Detail =
-                    $"{(options.Zone01Diagnostic ? "ZONE01-DIAGNOSE PASS (NICHT ZERTIFIZIERT)" : "LOAD RAMP PASS")} · " +
+                    $"{(localDiagnostic ? "LOKAL-DIAGNOSE PASS (NICHT ZERTIFIZIERT)" : "LOAD RAMP PASS")} · " +
                     $"{finalTarget:N0} echte Headless-Sessions · " +
                     $"ShinePlayer {baselinePlayers + finalTarget:N0}/{baseline.Pools.PlayerLimit:N0} · " +
                     $"{stageResults.Count} Laststufen serverseitig verifiziert." +
@@ -721,7 +723,8 @@ public sealed class FiestaLoadRampOptions
                 1450, 1500, 1510, 1550, 1600 };
 
     public string TargetZoneExePath { get; init; } = string.Empty;
-    public bool Zone01Diagnostic { get; init; } // Read-only original Zone01 investigation, NEVER a capacity certification.
+    public bool Zone01Diagnostic { get; init; } // Preserve Zone01 diagnostic mode.
+    public bool Zone00Diagnostic { get; init; } // Same strict path, authentic map routing.
     public string CredentialManifestPath { get; init; } = string.Empty;
     // Zero-based identity offset used by the isolated A test. Ramp B always starts at zero.
     public int CredentialStartIndex { get; init; }
@@ -765,9 +768,13 @@ public sealed class FiestaLoadRampOptions
         if (string.IsNullOrWhiteSpace(CredentialManifestPath) || !File.Exists(CredentialManifestPath))
             throw new FileNotFoundException("CredentialManifestPath wurde nicht gefunden.", CredentialManifestPath);
         ClientOptions.Validate();
-        if (Zone01Diagnostic &&
+        if (Zone00Diagnostic && Zone01Diagnostic)
+            throw new ArgumentException("Zone00 und Zone01 Diagnose dürfen nicht gleichzeitig aktiv sein.");
+        var localDiagnostic = Zone00Diagnostic || Zone01Diagnostic;
+        var requiredZoneName = Zone00Diagnostic ? "Zone00" : "Zone01";
+        if (localDiagnostic &&
             (!string.Equals(Path.GetFileName(Path.GetDirectoryName(Path.GetFullPath(TargetZoneExePath))),
-                "Zone01", StringComparison.OrdinalIgnoreCase)
+                requiredZoneName, StringComparison.OrdinalIgnoreCase)
              || !string.Equals(Path.GetFileName(TargetZoneExePath),
                 "Zone.exe", StringComparison.OrdinalIgnoreCase)
              || ClientOptions.RequiredZonePort is not > 0
@@ -776,7 +783,7 @@ public sealed class FiestaLoadRampOptions
             throw new ArgumentException(
                 "Zone01-Diagnose benötigt Zone01\\Zone.exe, einen bestätigten Client-Port " +
                 $"und höchstens {Zone01DiagnosticMaximumClients} Simulatoren.");
-        if (!Zone01Diagnostic && ClientOptions.RequiredZonePort.HasValue)
+        if (!localDiagnostic && ClientOptions.RequiredZonePort.HasValue)
             throw new ArgumentException("World-Redirect-Port-Vorgabe ist ausschließlich im Zone01-Diagnosemodus erlaubt.");
 
         if (string.IsNullOrWhiteSpace(ClientOptions.ClientCaptureProfilePath))
