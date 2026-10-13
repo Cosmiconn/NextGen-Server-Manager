@@ -399,11 +399,20 @@ public sealed class ZoneClientListenerTestConfiguration
         }
         catch (Exception ex)
         {
+            // If the record switch already happened, revert the record FIRST.
+            // A deployed manifest with Stock ServerInfo is an unsafe partial state.
+            var recordError = "";
+            if (File.Exists(jsonHistory))
+            {
+                try { File.Replace(jsonHistory, record, null, ignoreMetadataErrors: false); }
+                catch (Exception undoError) { recordError = " Manifest-Wiederherstellung FEHLER: " + undoError.Message; }
+            }
             var emergency = replaced
                 ? TryEmergencyRollback(info, backup, metadata.OriginalSha256)
                 : new EmergencyRollbackResult(false, "ServerInfo nicht ausgetauscht.");
-            return Failed("LISTENER REAPPLY FEHLER: " + ex.Message + " " + emergency.Detail,
-                emergencyRollbackAttempted: replaced, emergencyRollbackSucceeded: emergency.Success,
+            return Failed("LISTENER REAPPLY FEHLER: " + ex.Message + " " + emergency.Detail + recordError,
+                emergencyRollbackAttempted: replaced,
+                emergencyRollbackSucceeded: replaced && emergency.Success && recordError.Length == 0,
                 serverInfoPath: info, backupPath: backup, manifestPath: record);
         }
         finally
