@@ -89,6 +89,12 @@ jobs:
             throw 'Simplified Zone01 capture helper selftest failed.'
           }
           Write-Host 'ZONE1669_ZONE01_SELFTEST PASS'
+          $zone00 = Join-Path $env:GITHUB_WORKSPACE 'scripts\Start-Zone1669Zone00.ps1'
+          $zone00Result = @(& $zone00 -SelfTest)
+          if ($zone00Result -notcontains 'ZONE1669_ZONE00_SELFTEST PASS') {
+            throw 'Zone00 original-server capture helper selftest failed.'
+          }
+          Write-Host 'ZONE1669_ZONE00_SELFTEST PASS'
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
