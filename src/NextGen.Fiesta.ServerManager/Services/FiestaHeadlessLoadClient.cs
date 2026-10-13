@@ -1936,7 +1936,7 @@ public sealed class FiestaHeadlessLoadClient
     {
         if (!ZoneRedirectMatchesDiagnosticTarget(options, redirect))
             throw new InvalidOperationException(
-                $"ZONE01_ROUTE_MISMATCH: WorldManager SH4/3 verweist auf {redirect.Host}:{redirect.Port}, " +
+                $"ZONE_ROUTE_MISMATCH: WorldManager SH4/3 verweist auf {redirect.Host}:{redirect.Port}, " +
                 $"aber die ausdrücklich gewählte Testzone erwartet Port {options.RequiredZonePort}. " +
                 "Kein CH6/1 gesendet. World-/ServerInfo-Routing prüfen; niemals den Redirect überschreiben.");
     }
