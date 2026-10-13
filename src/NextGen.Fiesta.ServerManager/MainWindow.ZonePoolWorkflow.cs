@@ -211,6 +211,8 @@ public partial class MainWindow
         var rollbackRow = new WrapPanel();
         rollbackRow.Children.Add(CreateZonePoolButton("9 · Komplett-Rollback auf Stock", false,
             () => RunZonePoolUiActionAsync("Komplett-Rollback", RollbackZonePoolTestAsync)));
+        rollbackRow.Children.Add(CreateZonePoolButton("10 · Zertifizierten Patch wiederherstellen", false,
+            () => RunZonePoolUiActionAsync("Patch-Wiederherstellung", ReapplyZone00CertifiedProfileAsync)));
         rollbackRow.Children.Add(new TextBlock
         {
             Text = "Rollback-Reihenfolge ist fest: zuerst Listener/ServerInfo 1500, danach Zone.exe Stock.",
@@ -1410,6 +1412,66 @@ public partial class MainWindow
             var result = new ZonePoolSingleZoneTestDeployment().Rollback(target, ZonePoolRollbackConfirmation);
             if (!result.Success) throw new InvalidOperationException(result.Detail);
             return $"KOMPLETT-ROLLBACK SUCCESS · {listenerStatus} · Zone.exe Stock {ShortHash(result.TargetSha256)} wiederhergestellt.";
+        });
+    }
+
+
+    private async Task<string> ReapplyZone00CertifiedProfileAsync()
+    {
+        var target = RequireZonePoolTarget();
+        if (!string.Equals(new DirectoryInfo(Path.GetDirectoryName(target)!).Name,
+                "Zone00", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Zertifizierte Wiederherstellung ist nur für die gewählte Zone00 erlaubt.");
+
+        var confirmation = MessageBox.Show(this,
+            "Nach abgeschlossenem Zone00-Stock-Test wird das zertifizierte 2000/12000/512-Binary aus dem registrierten Patch-Audit " +
+            "sowie die zuvor gesicherte 2000er-Listener-Konfiguration wiederhergestellt. " +
+            "Alle vorhandenen Original-/Patchbackups und Manifest-Historien bleiben erhalten.\\n\\n" +
+            "SÄMTLICHE Zone.exe-Prozesse müssen vollständig beendet sein; WinDbg muss getrennt sein. " +
+            "Vorher Serverzustand und Log-Dateien sichern. Jetzt wirklich wiederherstellen?",
+            "Zone00 wieder zertifiziert patchen", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes)
+            return "Wiederherstellung ohne Dateiveränderung abgebrochen.";
+
+        return await Task.Run(() =>
+        {
+            if (!IsZoneListenerStock(target, out var stockDetail))
+                throw new InvalidOperationException(
+                    "Listener muss vor der Wiederherstellung auf nachweislich 1500 stehen: " + stockDetail);
+
+            var deployment = new ZonePoolSingleZoneTestDeployment();
+            var binary = deployment.ReapplyRolledBack(
+                target, ZonePoolSingleZoneTestDeployment.ReapplyConfirmationToken);
+            if (!binary.Success)
+                throw new InvalidOperationException("Binary-Reapply blockiert: " + binary.Detail);
+
+            var config = new ZoneClientListenerTestConfiguration();
+            var listener = config.ReapplyRolledBack(
+                target, ZoneClientListenerTestConfiguration.ReapplyConfirmationToken);
+            if (!listener.Success)
+            {
+                // Compensate a partial restore without silently leaving a new binary
+                // installed in the Stock/1500 test setup.
+                var undo = deployment.Rollback(
+                    target, ZonePoolSingleZoneTestDeployment.RollbackConfirmationToken);
+                throw new InvalidOperationException(
+                    "Listener-Reapply schlug fehl: " + listener.Detail +
+                    (undo.Success
+                        ? " · Zone00-Binary wurde wieder nach Stock zurückgesetzt."
+                        : " · ACHTUNG: Binary-Rollback NICHT erfolgreich: " + undo.Detail));
+            }
+
+            var verifiedListener = config.VerifyApplied(target);
+            if (!verifiedListener.Verified ||
+                verifiedListener.MaxAccept != ZoneClientListenerTestConfiguration.CertifiedMaxAccept)
+                throw new InvalidOperationException(
+                    "Patch-Reapply abgeschlossen, aber finale Listenerverifikation blockiert: " +
+                    verifiedListener.Detail + " · Keine Zone starten, Zustand prüfen.");
+
+            return "ZONE00 REPATCH SUCCESS · Binary 2000/12000/512 hashverifiziert · " +
+                   "Listener 2000/ServerInfo-Zeile verifiziert · alte Backups/Audit-Historie erhalten · " +
+                   "alle anderen Zonen unverändert · KEINE Zone automatisch gestartet. " +
+                   "Danach Server manuell starten und erst Runtime prüfen, dann den 1600er Ramp B.";
         });
     }
 
