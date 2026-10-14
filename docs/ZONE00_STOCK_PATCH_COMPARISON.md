@@ -33,7 +33,7 @@ git pull --ff-only
 .\scripts\Test-ZonePoolSingleZoneDeployment.ps1 -ZoneExe "C:\NextGenFiesta\Server\Zone01\Zone.exe"
 ```
 
-Der Selbsttest verwendet nur eine **temporäre Kopie** und prüft tatsächlich: Stock -> 2000er Patch -> Listener 2000 -> Listener Stock -> Binary Stock -> Binary Reapply -> Listener Reapply -> zweiter vollständiger Stock-Rollback. Jede Binary-Kopie muss genau den bekannten SHA-256 und 83/83 Patchsites aufweisen; in `ServerInfo.txt` darf jeweils ausschließlich die Zone00-Client-Zeile wechseln; alle alten Auditdateien bleiben erhalten. **Ein BUILD SUCCESS ersetzt diesen Windows-Datei-Selbsttest nicht.** Bei Selbsttestfehler hier abbrechen und Log prüfen.
+Der Selbsttest verwendet nur eine **temporäre Kopie** und prüft tatsächlich: Stock -> 2000er Patch -> Listener 2000 -> Listener Stock -> Binary Stock -> Binary Reapply -> Listener Reapply -> zweiter vollständiger Stock-Rollback. Jede Binary-Kopie muss genau den bekannten SHA-256 und 83/83 Patchsites aufweisen; in `ServerInfo.txt` darf jeweils ausschließlich die Zone00-Client-Zeile wechseln; alle alten Auditdateien bleiben erhalten. **Ein BUILD SUCCESS ersetzt diesen Windows-Datei-Selbsttest nicht.** Bei Selbsttestfehler hier abbrechen und Log prüfen. Auf FAILURE bleibt das isolierte TEMP-Verzeichnis mit Binary-/Listener-Manifests und Auditkopien zur Diagnose erhalten (Pfad in der Ausgabe); erst nach der Auswertung manuell löschen. Nach SUCCESS wird das TEMP-Verzeichnis automatisch entfernt. PowerShell meldet bei einem fehlgeschlagenen Selbsttest den Exitcode 20.
 
 ## Schritt 2: Bestehende Zone00 auf Stock zurücksetzen
 

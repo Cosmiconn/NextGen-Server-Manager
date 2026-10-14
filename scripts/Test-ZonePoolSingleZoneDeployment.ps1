@@ -53,17 +53,23 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($result.BaselineSha256)) { Write-Host "Baseline SHA256:    $($result.BaselineSha256)" }
     if (-not [string]::IsNullOrWhiteSpace($result.DeployedSha256)) { Write-Host "Deployed SHA256:    $($result.DeployedSha256)" }
     if (-not [string]::IsNullOrWhiteSpace($result.RolledBackSha256)) { Write-Host "Rolled-back SHA256: $($result.RolledBackSha256)" }
-    if (-not [string]::IsNullOrWhiteSpace($result.TemporaryDirectory)) { Write-Host "TEMP:               $($result.TemporaryDirectory)" }
+    if (-not $result.Success -and -not [string]::IsNullOrWhiteSpace($result.TemporaryDirectory)) {
+        Write-Host "TEMP (bei Fehler zur Analyse erhalten): $($result.TemporaryDirectory)"
+    }
 
     if (-not $result.Success) {
-        Write-Error 'DEPLOYMENT SELFTEST: FAILURE'
+        Write-Host 'DEPLOYMENT SELFTEST: FAILURE'
         exit 20
     }
 
     Write-Host ''
     Write-Host 'DEPLOYMENT SELFTEST: SUCCESS'
-    Write-Host 'Der echte Serverordner wurde nicht veraendert.'
+    Write-Host 'Der echte Serverordner wurde nicht veraendert; das erfolgreiche TEMP-Verzeichnis wird entfernt.'
     exit 0
+}
+catch {
+    Write-Host ('DEPLOYMENT SELFTEST: FAILURE - ' + $_.Exception.Message)
+    exit 20
 }
 finally {
     Pop-Location

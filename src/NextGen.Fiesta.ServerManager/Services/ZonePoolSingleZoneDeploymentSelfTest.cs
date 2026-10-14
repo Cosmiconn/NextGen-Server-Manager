@@ -25,6 +25,7 @@ public sealed class ZonePoolSingleZoneDeploymentSelfTest
 
         var testDirectory = Path.Combine(Path.GetTempPath(), "NextGen-ZonePoolDeploymentSelfTest-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDirectory);
+        var completedSuccessfully = false;
 
         var root = Path.Combine(testDirectory, "Server");
         var zoneFolder = Path.Combine(root, "Zone00");
@@ -170,6 +171,7 @@ public sealed class ZonePoolSingleZoneDeploymentSelfTest
             if (!sourceHashAfter.Equals(sourceHashBefore, StringComparison.OrdinalIgnoreCase))
                 return Failed("Die vom Benutzer angegebene Baseline-Datei wurde während des Selbsttests verändert.", testDirectory, create, deploy, rollback);
 
+            completedSuccessfully = true;
             return new ZonePoolSingleZoneDeploymentSelfTestResult
             {
                 Success = true,
@@ -193,13 +195,15 @@ public sealed class ZonePoolSingleZoneDeploymentSelfTest
         {
             try
             {
-                if (Directory.Exists(testDirectory))
+                // Retain the isolated files on FAILURE for hash/manifest/audit inspection.
+                // Successful runs still remove their disposable test directory.
+                if (completedSuccessfully && Directory.Exists(testDirectory))
                     Directory.Delete(testDirectory, recursive: true);
             }
             catch
             {
-                // The result includes the temp directory for manual cleanup if Windows
-                // still holds a handle briefly. Cleanup failure does not change the verdict.
+                // A successful test may leave its temp directory if Windows holds a handle.
+                // Cleanup failure does not change the verified test verdict.
             }
         }
     }
