@@ -425,6 +425,8 @@ public partial class MainWindow
             () => RunPlayerLoadRampUiAsync(singleClientOnly: false, zone00Diagnostic: true)));
         actionRow.Children.Add(CreateZonePoolButton("D · Zone01-Fehlerdiagnose 1 → 1100", false,
             () => RunPlayerLoadRampUiAsync(singleClientOnly: false, zone01Diagnostic: true)));
+        actionRow.Children.Add(CreateZonePoolButton("E · Startpunkt-Vergleich vorbereiten", false,
+            PrepareSpawnDensityPlanUiAsync));
         actionRow.Children.Add(new TextBlock
         {
             Text = "Starttakt (s)",
@@ -839,6 +841,44 @@ public partial class MainWindow
         }
     }
 
+    private Task PrepareSpawnDensityPlanUiAsync()
+    {
+        if (_zonePoolWorkflowBusy)
+        {
+            SetZoneLoadStatus("Bitte laufende Load-/Zone-Aktion zuerst abschließen.");
+            return Task.CompletedTask;
+        }
+        try
+        {
+            var manifest = _zoneLoadCredentialPathBox?.Text.Trim();
+            if (string.IsNullOrWhiteSpace(manifest) || !File.Exists(manifest))
+                throw new InvalidOperationException("Vorprovisioniertes Credential-Manifest auswählen.");
+            MessageBox.Show(this,
+                "Erstellt einen Vergleich für die ersten 1100 Testcharaktere: gleicher Startpunkt / verteilte Startpunkte. " +
+                "Es wird keine Datenbankverbindung geöffnet. Wähle im nächsten Dialog eine JSON-Datei mit im Spiel " +
+                "geprüften Positionen auf derselben Map. Ohne solche Punkte: Dialog abbrechen; dann werden nur " +
+                "eine lesende Positionsabfrage, eine Vorlage und die Anleitung erstellt.",
+                "Startpunkt-Vergleich vorbereiten", MessageBoxButton.OK, MessageBoxImage.Information);
+            var picker = new OpenFileDialog
+            {
+                Title = "Geprüfte Startpunkte wählen – Abbrechen = nur Bestandsprüfung",
+                Filter = "Positionsdatei (*.json)|*.json",
+                CheckFileExists = true
+            };
+            var pointsPath = picker.ShowDialog(this) == true ? picker.FileName : null;
+            var directory = FiestaSpawnDensityPlan.Generate(manifest, GetZonePoolWorkDirectory(), pointsPath);
+            SetZoneLoadStatus((pointsPath == null ? "Positionsprüfung vorbereitet" : "Startpunkt-SQL-Plan vorbereitet") +
+                " · Noch kein Lastlauf und keine SQL-Änderung ausgeführt · " + directory);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(directory) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            SetZoneLoadStatus("Startpunkt-Vergleich: " + ex.Message);
+            MessageBox.Show(this, ex.Message, "Startpunkt-Vergleich", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        return Task.CompletedTask;
+    }
+
     private async Task RunPlayerLoadRampUiAsync(bool singleClientOnly, bool zone01Diagnostic = false, bool zone00Diagnostic = false)
     {
         if (_zonePoolWorkflowBusy)
@@ -936,7 +976,7 @@ public partial class MainWindow
             var selectedIdentityNumber = singleClientOnly
                 ? ParseZoneLoadInt(_zoneLoadSingleIdentityBox, "A-Identität", 1, credentialManifest.Clients.Count)
                 : 1;
-            var priorityIdentityNumber = singleClientOnly
+            var priorityIdentityNumber = singleClientOnly || localDiagnostic
                 ? 0
                 : ParseZoneLoadInt(_zoneLoadPriorityIdentityBox, "B: zuerst #", 0, credentialManifest.Clients.Count);
             var delayedZoneReentryAttempts = singleClientOnly || localDiagnostic

@@ -94,6 +94,9 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(identityProvisionSelfTest.Detail);
             Log("LOAD_IDENTITY_PROVISION_SELFTEST PASS · " + identityProvisionSelfTest.Detail);
 
+            FiestaSpawnDensityPlan.RunSelfTest();
+            Log("SPAWN_DENSITY_PLAN_SELFTEST PASS");
+
             var loadRampTimingSelfTest = FiestaLoadRampOptions.RunTimingSelfTest();
             if (!loadRampTimingSelfTest.Success)
                 throw new InvalidOperationException(loadRampTimingSelfTest.Detail);
