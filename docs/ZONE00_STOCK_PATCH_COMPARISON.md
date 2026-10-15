@@ -1,6 +1,6 @@
 # Zone00: sicherer Stock-/Patch-Vergleich für Disconnect 1669
 
-**Status:** Implementiert und Windows-buildgeprüft. Der vollständige echte Lasttest bzw. Stock->Patch->Stock-Datei-Selbsttest muss noch auf dem Windows-Testserver ausgeführt werden. Dies ist **kein** automatischer Zugriff auf die lokale Serverinstallation. `main` und die akzeptierte 1600-Spieler-Baseline bleiben unverändert.
+**Status (15.10.2026):** Release-Build, WPF-Smoke und isolierter Stock-/Patch-/Listener-Dateitest mit drei Rollback-Zyklen bestanden. Der echte Lastvergleich bleibt offen. Korrekturen und Nachweise: [Verifikationsbericht](ZONE_MODIFICATION_VALIDATION_2026-10-15.md). Dies ist **kein** automatischer Zugriff auf die lokale Serverinstallation. `main` und die akzeptierte 1600-Spieler-Baseline bleiben unverändert.
 
 **Ausgangslage:** Map-Routing bleibt auf **Zone00**. Ein testweises Umlenken aller Zone00-Maps auf Zone01 wäre ein anderer, unnötiger Eingriff. Der neue Diagnosemodus lässt WorldManager weiterhin die Zone via authentischem `SH4/3` wählen und prüft den gewählten Zone00-Listenerport **vor CH6/1**. Eine reine Portprüfung wird zusätzlich durch die **exakten live-gezählten ShinePlayer von Zone00** abgesichert.
 
