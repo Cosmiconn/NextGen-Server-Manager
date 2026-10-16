@@ -1,19 +1,19 @@
 # Zone00: Pool-Limit und Spawn-Verteilung
 
-Stand: 16.10.2026. Die strenge 1600er-Rampe auf **RouN mit verteilten Positionen ist bestanden**. Das belegt die Aufnahme über das Stock-Limit von 1500 hinaus. Es ist noch keine allgemeine Freigabe für 2000 Spieler oder ein Nachweis, dass Disconnect 1669 auf TSStart behoben ist.
+Stand: 16.10.2026, abgeschlossen nach Bereinigung um 20:41 MESZ. Die strengen 1600er-Rampen auf **RouN und TSStart mit verteilten Positionen sind bestanden**. Das belegt die Aufnahme über das Stock-Limit von 1500 hinaus und eine funktionierende Konfiguration für diese getestete Last. Es ist keine allgemeine Freigabe für 2000 gleichzeitig spielende Clients und kein universeller Fix des ShadowStep-Pfads.
 
 ## Vergleich mit dem vorherigen Lauf
 
-| Bedingung | TSStart, bisherige Positionen (15.10.) | RouN, verteilte Positionen (16.10.) |
-| --- | --- | --- |
-| Zone.exe / Listener | 2000/12000/512, Listener 2000 | identischer Patch und Listener |
-| Starttakt / Nachaufnahme | 2 Sekunden / ausgeschaltet | identisch |
-| Testidentitäten | vorhandene 1600 Charaktere | dieselben 1600 Charaktere |
-| Aufnahme | Stufen bis 1200 bestanden; Abbruch bei 1299 ready / 1 Fehler | alle 26 Stufen bis 1600 bestanden |
-| Finale Stabilität | nicht erreicht | 5 Minuten, 60 exakte ShinePlayer-Samples |
-| Disconnect 1669 | 15 Ereignisse, 8 Identitäten | keine neuen Ereignisse |
-| Laufzeitlogs | BLOCKED nach korrigierter Auswertung | CLEAN, keine Evidenzlücken |
-| Startlogs | siehe vorherigen Bericht | CLEAN, keine Evidenzlücken |
+| Bedingung | TSStart, bisherige Positionen (15.10.) | RouN, verteilt (16.10.) | TSStart, verteilt (16.10.) |
+| --- | --- | --- | --- |
+| Zone.exe / Listener | 2000/12000/512, Listener 2000 | identisch | identisch |
+| Starttakt / Nachaufnahme | 2 Sekunden / ausgeschaltet | identisch | identisch |
+| Testidentitäten | vorhandene 1600 Charaktere | dieselben 1600 | dieselben 1600 |
+| Aufnahme | bis 1200 bestanden; Abbruch bei 1299 ready / 1 Fehler | alle 26 Stufen bis 1600 | alle 26 Stufen bis 1600 |
+| Finale Stabilität | nicht erreicht | 5 Minuten, 60 exakte Samples | 5 Minuten, 60 exakte Samples |
+| Disconnect 1669 | 15 Ereignisse, 8 Identitäten | keine neuen Ereignisse | keine neuen Ereignisse |
+| Laufzeitlogs | BLOCKED nach korrigierter Auswertung | CLEAN, keine Evidenzlücken | CLEAN, keine Evidenzlücken |
+| Startlogs | siehe vorherigen Bericht | CLEAN, keine Evidenzlücken | CLEAN, keine Evidenzlücken |
 
 Der RouN-Lauf dauerte einschließlich Start und Cleanup **11:04–12:09 MESZ**; die Rampe lief **11:06–12:09 MESZ**. Alle 1600 Charaktere hatten danach genau einen zusätzlichen gespeicherten Login, unveränderte geplante Koordinaten auf RouN und positive HP. Alle 1600 Positionen waren verschieden. Reguläre Handoff-Retries bleiben Teil des bestehenden Protokolls; es wurden keine zusätzlichen Retry-Freigaben eingeführt.
 
@@ -32,19 +32,21 @@ Die Startlog-Prüfung dieses Piloten meldete REVIEW wegen einer beim Neustart ge
 
 ## Sichere Betriebsgrenze und offene Ursache
 
-Das unveränderte Patchprofil **Player 2000 / Mob 12000 / NPC 512** ist in diesem kontrollierten RouN-Szenario mit 1600 gleichzeitigen Sitzungen funktionsfähig. Ein Pool-Maximum allein ist keine Lastzusage. Der Testserver wurde anschließend vollständig gestoppt; die erfolgreich geprüften RouN-Positionen sind zusätzlich gesichert.
+Das unveränderte Patchprofil **Player 2000 / Mob 12000 / NPC 512** ist in beiden kontrollierten Szenarien mit 1600 gleichzeitigen Sitzungen funktionsfähig. Ein Pool-Maximum allein ist keine Lastzusage. Alle Testcharaktere bleiben abschließend auf den live geprüften verteilten TSStart-Positionen; ursprüngliche Positionen und die geprüfte RouN-Verteilung sind separat gesichert. Alle Fiesta-Dienste sind nach der unten beschriebenen Bereinigung gestoppt.
 
-Mapwechsel und geringere lokale Spawn-Dichte wurden in diesem Vergleich gemeinsam verändert. Deshalb lässt sich noch nicht entscheiden, welche Bedingung Disconnect 1669 verhindert. Als nächste unabhängige Kontrolle wird eine Verteilung auf **TSStart selbst** geprüft. Der fehlerhafte ShadowStep-/Koordinatenpfad wird nicht ausgehebelt oder durch zusätzliche Pool-Patches verdeckt. Die ursprüngliche TSStart-Positionssicherung bleibt erhalten.
+Der erfolgreiche zweite Vergleich auf **TSStart selbst** zeigt, dass ein Kartenwechsel für den PASS nicht erforderlich ist. Das Ergebnis stützt die lokale Spawn-/Positionssituation als wesentlichen Einfluss auf den Fehler; ein festes 1200-/1500-Player-Limit erklärt die Befunde nicht. Verteilung und konkrete Positionen ändern allerdings auch die unmittelbare Umgebung einzelner Charaktere. Eine bestimmte Kollisionsroutine, ein NPC oder eine exakte kritische Dichte ist dadurch nicht kausal nachgewiesen. Der ShadowStep-/Koordinatenpfad wurde nicht ausgehebelt oder zusätzlich gepatcht.
 
-## TSStart-Kontrolle: Pilot bestanden, große Rampe noch offen
+## TSStart-Kontrolle: Pilot und vollständige Rampe bestanden
 
 Am 16.10.2026 von **15:05 bis 15:11 MESZ** wurden zunächst 32 Charaktere auf freie, verteilte TSStart-Positionen gesetzt. Die übrigen 1568 blieben auf RouN. Drei Aufnahmestufen bis 32 und zwei Minuten Stabilität bestanden; der Laufzeit-Logaudit war CLEAN, ohne Disconnect 1669. Nach dem Abmelden waren alle 32 Positionen exakt erhalten und alle 32 Loginzähler erhöht.
 
 Der Startaudit meldete REVIEW, weil `Message.txt` beim Neustart gekürzt wurde und die allgemeine Checksum-Regel auf vorhandene SHN-Ladezeilen anschlug. Der vollständige geordnete Vorher-/Nachher-Vergleich ergab ausschließlich zwei entfernte alte Verbindungsversuchszeilen; alle übrigen Zeilen einschließlich der Checksum-Zeilen waren identisch. Diese manuelle Prüfung ist mit beiden Datei-Hashes separat protokolliert. Der ursprüngliche REVIEW-Bericht und `Passed=false` des Gesamtcontrollers bleiben unverändert; der automatische Folgelauf wurde dadurch zunächst nicht ausgelöst.
 
-Der danach separat angeforderte erhöhte Hauptlauf wurde von Windows vor Prozessstart abgebrochen. **Es gibt noch keinen 1600er-TSStart-Verteilungsnachweis.** Alle 1600 Charaktere wurden anschließend transaktional auf die separat gesicherte, vollständig geprüfte RouN-Verteilung zurückgesetzt; die exakte Übereinstimmung aller Map-/X-/Y-/Richtungswerte wurde per SQL geprüft. Alle Fiesta-Dienste sind gestoppt.
+Ein danach angeforderter erhöhter Hauptlauf wurde zunächst von Windows vor Prozessstart abgebrochen. Alle 1600 Charaktere wurden zwischenzeitlich transaktional auf die gesicherte RouN-Verteilung zurückgesetzt; die exakte Übereinstimmung wurde per SQL geprüft.
 
-Nach erneuter Windows-Freigabe wurde der vollständige Kontrolllauf um **16:26 MESZ** gestartet. Der Controller bestätigte vor Dienststart alle 1600 Charaktere auf ihren geplanten TSStart-Positionen. Ergebnis und anschließender Zustand stehen noch aus; der Pilot wird nicht als Ersatz für diesen vollständigen Nachweis gewertet.
+Nach erneuter Windows-Freigabe wurde der vollständige Kontrolllauf um **16:26 MESZ** gestartet. Die Rampe lief **16:28–17:31 MESZ**. Alle 26 Stufen bestanden; die letzte Stufe erreichte 1600 ready / 1600 ShinePlayer bei weiterhin 2000 Pool-Slots. Die anschließende Fünf-Minuten-Phase lieferte 60 exakte Samples. Es gab keine endgültigen Clientfehler und keine transienten Zone-Handoff-Retries. Start- und Laufzeit-Audit sind CLEAN mit vollständiger Evidenz, ohne neuen Disconnect 1669.
+
+Die nachträgliche Datenbankprüfung bestätigte alle 1600 Charaktere auf verschiedenen, exakt geplanten TSStart-Positionen, je genau einen zusätzlichen gespeicherten Login und positive HP. Die Kontrolle wurde separat gesichert, weil der ursprüngliche Controller wegen des Login-Stoppfehlers seinen Positionsvergleich übersprungen hatte.
 
 Die gesicherten Positionsdaten verdeutlichen die veränderte lokale Dichte:
 
@@ -52,9 +54,19 @@ Die gesicherten Positionsdaten verdeutlichen die veränderte lokale Dichte:
 | --- | ---: | ---: | ---: |
 | TSStart vor Änderungen, 1600 Charaktere | 1215 | 128 | 156 |
 | RouN nach bestandenem 1600er-Lauf | 1600 | 1 | 13 |
-| TSStart-Verteilungsplan, erst 32 live geprüft | 1600 | 1 | 12 |
+| TSStart nach bestandenem 1600er-Lauf | 1600 | 1 | 12 |
 
-Diese räumlichen Kennzahlen belegen die Entzerrung, nicht die Ursache des ShadowStep-Fehlers. Die vollständige TSStart-Gegenprobe bleibt erforderlich, bevor Mapwechsel und Verteilung voneinander abgegrenzt werden können.
+Diese räumlichen Kennzahlen belegen die Entzerrung. Zusammen mit der vollständigen TSStart-Gegenprobe ergibt sich ein belastbarer Betriebsnachweis für verteilte Spawns; die genaue Ursache des ShadowStep-Fehlers bei den alten Positionen bleibt offen.
+
+## Login-Stoppfehler und ehrliche Stop-Prüfung
+
+Nach dem erfolgreichen TSStart-Lastlauf blieb der originale Login-Dienst ab 17:31 MESZ in STOP_PENDING. Zone00 und alle anderen Fiesta-Dienste waren gestoppt. Der Controller meldete deshalb korrekt `Passed=false` mit `CleanupError`; dieser Originalbefund bleibt erhalten. Der Last-PASS und die CLEAN-Logaudits sind getrennte Ergebnisse, kein Beleg für einen erfolgreichen automatischen Dienststopp.
+
+`SmartOrchestrator` ignorierte bisher das Ergebnis seiner 25-Sekunden-Stoppwartezeit und meldete trotzdem „Smart Stop abgeschlossen“. Er wartet nun auch auf bereits stoppende Dienste, begrenzt auf 60 Sekunden, und überprüft am Ende jeden ausgewählten Dienst. Verbleibende Zustände einschließlich STOP_PENDING oder Unknown führen zu einem Fehler; ein erfolgreicher Neustart kann nicht mehr auf diesem falschen Stop-Erfolg aufbauen. Der Manager beendet keine Prozesse zwangsweise.
+
+Die Fehlerstrecke wurde am tatsächlich hängenden Login-Dienst geprüft: Nach 60 Sekunden wird `Smart Stop unvollständig: _Login: StopPending` gemeldet. Die lokale Bereinigung verifizierte anschließend Dienst/PID, Prozesspfad und Startzeit sowie gestoppte übrige Dienste. Ein erster strenger Guard hielt wegen verbliebener TCP-Einträge an; die genauere Prüfung identifizierte ausschließlich zwei unverbundene lokale Bound-Sockets ohne Peer/Listener und keine SQL-Sitzungen. Nur dieser bereits seit Stunden stoppende Test-Login-Prozess wurde daraufhin beendet. Um **20:41 MESZ** waren alle Dienste nachweislich gestoppt; der korrigierte Smart Stop bestand danach auch seine Erfolgsstrecke. Alle 1600 TSStart-Positionen blieben erhalten.
+
+Dieser Befund betrifft die Bereinigung des originalen Login-Dienstes, nicht einen Zone-Pool- oder Aufnahmefehler. Er wird nicht als behobener Login-Binary-Defekt ausgegeben.
 
 ## Kaltstart-Wartezeit
 
@@ -64,7 +76,7 @@ Der erste Pilotversuch brach vor Spieleranmeldungen ab, weil AccountLog die bish
 
 `artifacts/zone-density-20261016/` enthält die Sicherungsprüfung, Positionssnapshots und den Pilot; `certification/` enthält Controllerstatus, Startaudit, Runtimeaudit, 26 Stufenergebnisse, Stabilitätsmessungen sowie Positionsvergleich vor/nach dem Lauf. Die unveränderte Zone.exe hat SHA-256 `B8A6688A5648FB39363D7A39B64794DD42095F51D0A4205E40FC332147783EAC`.
 
-`tsstart/pilot/` enthält die separate kleine Gegenprobe und `startup-manual-review.json`; `density-summary.json` enthält die räumlichen Kennzahlen. Die getesteten Änderungen sind außerdem im erfolgreichen [Windows-Build 38903890664](https://github.com/Cosmiconn/NextGen-Server-Manager/actions/runs/38903890664) für Commit `07411b7c687a64a00a135afa847366d8f2bd1520` geprüft.
+`tsstart/pilot/` enthält die kleine Gegenprobe und `startup-manual-review.json`; `tsstart/certification/` den vollständigen Lastlauf und `positions-verification.json`; `tsstart/cleanup-recovery-02/` den kontrollierten Abschluss der Bereinigung. `density-summary.json` enthält die räumlichen Kennzahlen. Der abschließende Profilcheck bestätigt weiterhin 83/83 Patchstellen, bytegenauen inversen Rollback und Listener 2000. Release-Build und separater Publish der Stop-Korrektur bestanden ohne Fehler/Warnungen.
 
 Datenbanksicherungen, Charakterdaten, Zugangsdaten, Serverbinaries und Rohlogs bleiben lokal. Veröffentlicht werden ausschließlich Code und zusammengefasste Prüfergebnisse.
 
