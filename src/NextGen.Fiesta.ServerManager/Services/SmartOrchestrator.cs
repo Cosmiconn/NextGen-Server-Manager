@@ -142,7 +142,9 @@ public sealed class SmartOrchestrator
         var start = await _services.StartAsync(svc.ServiceName, ct);
         if (!start.Success && !start.StdOut.Contains("already", StringComparison.OrdinalIgnoreCase))
             Report($"Startmeldung {svc.ServiceName}: {start.StdOut} {start.StdErr}".Trim(), DiagnosticSeverity.Warning);
-        if (!await _services.WaitForStateAsync(svc.ServiceName, ServiceRuntimeState.Running, TimeSpan.FromSeconds(25), ct))
+        // Cold database/session-worker initialization can exceed 25 seconds even when
+        // the service starts successfully. Keep a bounded wait for SCM RUNNING.
+        if (!await _services.WaitForStateAsync(svc.ServiceName, ServiceRuntimeState.Running, TimeSpan.FromSeconds(60), ct))
             throw new InvalidOperationException($"{svc.DisplayName} erreicht den Zustand RUNNING nicht.");
     }
 
