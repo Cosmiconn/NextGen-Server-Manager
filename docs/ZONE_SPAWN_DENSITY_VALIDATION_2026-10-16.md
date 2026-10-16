@@ -36,6 +36,26 @@ Das unveränderte Patchprofil **Player 2000 / Mob 12000 / NPC 512** ist in diese
 
 Mapwechsel und geringere lokale Spawn-Dichte wurden in diesem Vergleich gemeinsam verändert. Deshalb lässt sich noch nicht entscheiden, welche Bedingung Disconnect 1669 verhindert. Als nächste unabhängige Kontrolle wird eine Verteilung auf **TSStart selbst** geprüft. Der fehlerhafte ShadowStep-/Koordinatenpfad wird nicht ausgehebelt oder durch zusätzliche Pool-Patches verdeckt. Die ursprüngliche TSStart-Positionssicherung bleibt erhalten.
 
+## TSStart-Kontrolle: Pilot bestanden, große Rampe noch offen
+
+Am 16.10.2026 von **15:05 bis 15:11 MESZ** wurden zunächst 32 Charaktere auf freie, verteilte TSStart-Positionen gesetzt. Die übrigen 1568 blieben auf RouN. Drei Aufnahmestufen bis 32 und zwei Minuten Stabilität bestanden; der Laufzeit-Logaudit war CLEAN, ohne Disconnect 1669. Nach dem Abmelden waren alle 32 Positionen exakt erhalten und alle 32 Loginzähler erhöht.
+
+Der Startaudit meldete REVIEW, weil `Message.txt` beim Neustart gekürzt wurde und die allgemeine Checksum-Regel auf vorhandene SHN-Ladezeilen anschlug. Der vollständige geordnete Vorher-/Nachher-Vergleich ergab ausschließlich zwei entfernte alte Verbindungsversuchszeilen; alle übrigen Zeilen einschließlich der Checksum-Zeilen waren identisch. Diese manuelle Prüfung ist mit beiden Datei-Hashes separat protokolliert. Der ursprüngliche REVIEW-Bericht und `Passed=false` des Gesamtcontrollers bleiben unverändert; der automatische Folgelauf wurde dadurch zunächst nicht ausgelöst.
+
+Der danach separat angeforderte erhöhte Hauptlauf wurde von Windows vor Prozessstart abgebrochen. **Es gibt noch keinen 1600er-TSStart-Verteilungsnachweis.** Alle 1600 Charaktere wurden anschließend transaktional auf die separat gesicherte, vollständig geprüfte RouN-Verteilung zurückgesetzt; die exakte Übereinstimmung aller Map-/X-/Y-/Richtungswerte wurde per SQL geprüft. Alle Fiesta-Dienste sind gestoppt.
+
+Nach erneuter Windows-Freigabe wurde der vollständige Kontrolllauf um **16:26 MESZ** gestartet. Der Controller bestätigte vor Dienststart alle 1600 Charaktere auf ihren geplanten TSStart-Positionen. Ergebnis und anschließender Zustand stehen noch aus; der Pilot wird nicht als Ersatz für diesen vollständigen Nachweis gewertet.
+
+Die gesicherten Positionsdaten verdeutlichen die veränderte lokale Dichte:
+
+| Positionssatz | Verschiedene Positionen | Maximum exakt übereinander | Maximum innerhalb Radius 100 um eine Charakterposition, einschließlich Mittelpunkt |
+| --- | ---: | ---: | ---: |
+| TSStart vor Änderungen, 1600 Charaktere | 1215 | 128 | 156 |
+| RouN nach bestandenem 1600er-Lauf | 1600 | 1 | 13 |
+| TSStart-Verteilungsplan, erst 32 live geprüft | 1600 | 1 | 12 |
+
+Diese räumlichen Kennzahlen belegen die Entzerrung, nicht die Ursache des ShadowStep-Fehlers. Die vollständige TSStart-Gegenprobe bleibt erforderlich, bevor Mapwechsel und Verteilung voneinander abgegrenzt werden können.
+
 ## Kaltstart-Wartezeit
 
 Der erste Pilotversuch brach vor Spieleranmeldungen ab, weil AccountLog die bisherige 25-Sekunden-Wartezeit für SCM RUNNING überschritt. Das Dienstlog zeigte erfolgreiche Initialisierung am Ende dieses Fensters; anschließend räumte der Controller auf und stellte die Positionen wieder her. `SmartOrchestrator` wartet nun begrenzt bis zu **60 Sekunden** auf RUNNING. Release-Build: null Fehler/Warnungen. Danach bestanden der erneute Start, der 32er-Pilot und der vollständige 1600er-Lauf einschließlich kontrolliertem Stoppen.
@@ -43,6 +63,8 @@ Der erste Pilotversuch brach vor Spieleranmeldungen ab, weil AccountLog die bish
 ## Lokale Nachweise
 
 `artifacts/zone-density-20261016/` enthält die Sicherungsprüfung, Positionssnapshots und den Pilot; `certification/` enthält Controllerstatus, Startaudit, Runtimeaudit, 26 Stufenergebnisse, Stabilitätsmessungen sowie Positionsvergleich vor/nach dem Lauf. Die unveränderte Zone.exe hat SHA-256 `B8A6688A5648FB39363D7A39B64794DD42095F51D0A4205E40FC332147783EAC`.
+
+`tsstart/pilot/` enthält die separate kleine Gegenprobe und `startup-manual-review.json`; `density-summary.json` enthält die räumlichen Kennzahlen. Die getesteten Änderungen sind außerdem im erfolgreichen [Windows-Build 38903890664](https://github.com/Cosmiconn/NextGen-Server-Manager/actions/runs/38903890664) für Commit `07411b7c687a64a00a135afa847366d8f2bd1520` geprüft.
 
 Datenbanksicherungen, Charakterdaten, Zugangsdaten, Serverbinaries und Rohlogs bleiben lokal. Veröffentlicht werden ausschließlich Code und zusammengefasste Prüfergebnisse.
 
