@@ -190,6 +190,16 @@
     "repairAction": "None"
   },
   {
+    "code": "NG-ZONE-0023",
+    "severity": "Error",
+    "pattern": "\\bso_Disconnect(?:\\s+\\S+\\s+1669\\b|\\s*\\[1669\\])",
+    "regex": true,
+    "title": "Zone-Disconnect 1669",
+    "description": "Die Zone hat einen Client mit Disconnect-Grund 1669 getrennt. Beim untersuchten NA2016-Binary gehört dieser Fehler zum ShadowStep/fm_Marking-Pfad; der Logeintrag allein belegt weder den auslösenden Akteur noch die tatsächlichen Koordinaten.",
+    "recommendation": "Mit Login-/Handoff-Trace und CoordRepairLog zeitlich korrelieren. Für die Ursachenanalyse Rückgabewert, Objektkoordinaten, Mapgrenzen und Aufrufstack in einem getrennten Diagnoselauf erfassen. Ein erfolgreicher Retry beseitigt diesen Befund nicht.",
+    "repairAction": "None"
+  },
+  {
     "code": "NG-ZONE-0022",
     "severity": "Error",
     "pattern": "Too many BlockDistribute",

@@ -1,6 +1,6 @@
 # Zone00: sicherer Stock-/Patch-Vergleich für Disconnect 1669
 
-**Status (15.10.2026):** Release-Build, WPF-Smoke und isolierter Stock-/Patch-/Listener-Dateitest mit drei Rollback-Zyklen bestanden. Der echte Lastvergleich bleibt offen. Korrekturen und Nachweise: [Verifikationsbericht](ZONE_MODIFICATION_VALIDATION_2026-10-15.md). Dies ist **kein** automatischer Zugriff auf die lokale Serverinstallation. `main` und die akzeptierte 1600-Spieler-Baseline bleiben unverändert.
+**Status (15.10.2026):** Release-Build, WPF-Smoke und isolierter Dateitest mit drei Rollback-Zyklen bestanden. Der ausdrücklich autorisierte echte Zone00-Rückweg Stock -> Patch ist ebenfalls verifiziert. Stock startet und erlaubt eine Anmeldung, erschöpft aber unter den vorhandenen Daten bereits seine Mob-/NPC-Pools; die Logprüfung blockiert. Ein sauberer Stock-Lastvergleich ist damit nicht gegeben. Die erneute strenge Patch-Rampe bestand 19 Stufen bis 1200 und scheiterte beim Aufbau auf 1300: 1299 Ready-Clients, ein endgültiger Handoff-Fehler mit Disconnect 1669. Kein neuer 1600er-PASS. Korrekturen und Nachweise: [Verifikationsbericht](ZONE_MODIFICATION_VALIDATION_2026-10-15.md). `main` und der historische 1600-Spieler-Nachweis bleiben unverändert.
 
 **Ausgangslage:** Map-Routing bleibt auf **Zone00**. Ein testweises Umlenken aller Zone00-Maps auf Zone01 wäre ein anderer, unnötiger Eingriff. Der neue Diagnosemodus lässt WorldManager weiterhin die Zone via authentischem `SH4/3` wählen und prüft den gewählten Zone00-Listenerport **vor CH6/1**. Eine reine Portprüfung wird zusätzlich durch die **exakten live-gezählten ShinePlayer von Zone00** abgesichert.
 
@@ -41,7 +41,7 @@ Der Selbsttest verwendet nur eine **temporäre Kopie** und prüft tatsächlich: 
 2. In der GUI **Zone00** als Ziel auswählen.
 3. **9 · Komplett-Rollback auf Stock** wählen und die Rückfrage bestätigen. Die vorhandene Implementierung rollt zwingend erst Listener `2000 → 1500` zurück, dann die exakt zertifizierte Zone.exe `2000/12000/512 → Stock`.
 4. Die Statusmeldung **`KOMPLETT-ROLLBACK SUCCESS`** prüfen. Nur wenn der Vorgang komplett erfolgreich war, die Dienste/Zone00 erneut starten.
-5. Den unveränderten Map- und Character-Zustand beibehalten. Falls die ursprüngliche Stock-Zone aufgrund zu vieler Mobs/NPCs oder anderen Umgebungsunterschieden nicht startet, **nicht** einfach Limits erhöhen: Logs prüfen und das Experiment als nicht direkt vergleichbar kennzeichnen.
+5. Den unveränderten Map- und Character-Zustand beibehalten. Falls die ursprüngliche Stock-Zone aufgrund zu vieler Mobs/NPCs oder anderen Umgebungsunterschieden nicht startet, **nicht** einfach Limits erhöhen: Logs prüfen und das Experiment als nicht direkt vergleichbar kennzeichnen. Ein offener Client-Port genügt nicht: Im echten Versuch am 15.10. startete Stock mit 8000/8000 Mobs und 255/256 NPCs, meldete aber `Too many npc` und `Too many mob`. Die Anmeldung bestand, die Welt war dennoch nicht vollständig geladen. Bei solchen Start-/Poolfehlern keinen Stock-Lastlauf als identischen Kontrollversuch ausweisen.
 
 ## Schritt 3: Original-Zone00 mit WinDbg und Headless-Clients untersuchen
 

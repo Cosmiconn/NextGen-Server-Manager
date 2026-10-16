@@ -46,11 +46,11 @@ Reproduktion (PowerShell 7, keine laufende Zone.exe):
 
 ## Weiterhin offen – Gesamtziel nicht abgeschlossen
 
-- Reale Reproduktion und Ursachenbehebung von Disconnect 1669. Im untersuchten Capture-Ordner lagen nur vorbereitete Debugger-Skripte, kein FirstHit-Log.
-- Kontrollierter Stock-/Patch-Vergleich unter identischer Last, anschließend erneute 1600er-Rampe, Runtime-/Stabilitäts- und Logprüfung.
+- Disconnect 1669 ist im echten Lastlauf erneut reproduziert, aber seine Ursache noch nicht behoben. Es fehlt weiterhin eine FirstHit-Aufzeichnung mit tatsächlichem Rückgabewert, Objektkoordinaten, Mapgrenzen und Aufrufstack.
+- Der reale Stock-/Patch-Rückweg ist bestanden. Ein sauberer identischer Stock-Lastvergleich scheitert an der bereits beim Start erschöpften Mob-/NPC-Kapazität. Die erneute strenge 1600er-Rampe wurde ausgeführt und in der 1300er-Stufe durch Disconnect 1669 blockiert; kein neuer 1600er-PASS.
 - Der dokumentierte KQ-W2Z-MAKED Buffer-full[0]-Befund ist durch diese Offline-Tests weder erklärt noch behoben.
 - Spawn-Density-Versuch benötigt im Spiel verifizierte Positionen und einen echten SQL-/Serverlauf; der Generator-Selbsttest beweist diese nicht.
-- Der Betreiber hat den Live-Test einschließlich Serverstart und kontrolliertem Stock-/Patch-Rückweg ausdrücklich autorisiert. Die ersten Ergebnisse stehen unten; Stock-Vergleich und volle Rampe bleiben bis zu ihren tatsächlichen Ergebnissen offen.
+- Der Betreiber hat den Live-Test einschließlich Serverstart und kontrolliertem Stock-/Patch-Rückweg ausdrücklich autorisiert. Die ausgeführten Tests und ihre Grenzen stehen unten.
 - Andere Poolprofile und Live-Prozesspatching sind weiterhin nicht freigegeben.
 
 Der historische 1600er-PASS bleibt ein früherer Kapazitätsbeleg. Er ersetzt weder die aktuelle Laufzeitprüfung noch eine Ursachenanalyse der Disconnects.
@@ -87,4 +87,40 @@ Am 15.10.2026, 22:29–22:31 MESZ, wurde die lokale Installation nach einer voll
 
 Lokale Nachweise: artifacts/zone-live-20261015/initial/{state.json,runtime.log,smoke/ramp-result.json,smoke/log-audit.json}. Sicherung, Rohlogs und Testzugänge bleiben lokal und werden nicht veröffentlicht. Dieser Ein-Client-Test ist kein 1600er-Kapazitätsnachweis und reproduziert Disconnect 1669 nicht.
 
-Der anschließende Stock-/Patch-Test mit nachfolgender strenger 1600er-Rampe wurde vorbereitet, aber noch nicht ausgeführt: Windows meldete die weitere UAC-Anforderung als abgebrochen. Der autorisierte Test benötigt weiterhin einen erhöhten Windows-Prozess. Dabei wurden keine Stock-Dateien in die Installation eingespielt.
+## Echter Stock-/Patch-Rückweg und Stock-Start
+
+Nach erneuter erfolgreicher Windows-Freigabe lief am 15.10.2026, 22:51–22:53 MESZ, der kontrollierte Rückweg auf der tatsächlichen Zone00-Installation:
+
+- Listener auf 1500 und Zone.exe bytegenau auf den ursprünglichen Stock-Hash zurückgesetzt. Auditbackups und registriertes Originalbackup blieben erhalten.
+- Stock-Zone gestartet und Runtimeprofil 1500/8000/256 verifiziert. Vor der Anmeldung wurden Player 0, Mob 8000 und NPC 255 gezählt.
+- Eine echte Anmeldung und die 30-Sekunden-Stabilität bestanden auch auf Stock. Die getrennte Logprüfung blockierte jedoch: bereits beim Start `NPCManager::nm_SetNPC : Too many npc[0]` und `MobBreeder::mb_regen : Too many mob[0]`; weitere Mob-Limit-Assertions während der Anmeldung.
+- Damit ist Stock unter diesen unveränderten Serverdaten kein sauberer Kontrollzustand: Die Welt wird wegen erschöpfter Pools nicht vollständig geladen. Ein Stock-1100-Durchlauf unter dieser abweichenden Weltbelegung würde einen identischen Lastvergleich nicht belegen und wurde nicht als solcher ausgeführt.
+- Alle Testdienste gestoppt; ursprünglichen Patch und Listener 2000 erfolgreich wiederhergestellt. Unabhängiger Verifier bestätigte 83/83 Sites, exakten Patch-/Originalhash sowie Listenermanifest, Backup und Hash.
+- Anschließend lief die strenge gepatchte 1600er-Rampe ohne Debugger, mit unverändertem Zwei-Sekunden-Starttakt und ohne verzögerte Nachaufnahme. Ergebnis: BLOCKED, siehe folgenden Abschnitt.
+
+Lokale Nachweise: artifacts/zone-live-20261015/stock-preflight/ mit Rollback-, Pool-, Login-, Logaudit- und Reapply-Ergebnissen. Der Original-1669-Debugger wurde nicht gegen die gepatchte Zone erzwungen. Die Poolerschöpfung erklärt die Stock-Startfehler, nicht den separat untersuchten Disconnect 1669.
+
+## Strenge 1600er-Rampe: Disconnect 1669 erneut reproduziert
+
+Die gepatchte Zone lief vom 15.10.2026, 22:53–23:42 MESZ, einschließlich Start und anschließendem Stoppen. Die Rampe selbst lief 22:55–23:42 MESZ mit vorhandenen Konten, authentischen Login-/World-/Zone-Handoffs, Zwei-Sekunden-Starttakt, regulären vier Handoff-Versuchen und ohne verzögerte Nachaufnahme.
+
+- 19 Stufen von 1 bis 1200 bestanden jeweils mit zwei exakten ShinePlayer-Messungen. Dies sind bestandene Aufnahme-/Zählstufen, kein vollständiger Stabilitätsnachweis für 1600.
+- Aufbau der Stufe 1300: Testidentität 1220 scheiterte vor SH6/2 nach vier Versuchen. Die zeitgleichen Zone-Logs nennen so_Disconnect 1669; bei Abbruch waren 1299 Clients ready, einer endgültig fehlgeschlagen.
+- Der unabhängige Fehler-Snapshot bestätigte weiterhin dieselbe laufende, zertifizierte Zone: Player 1299/2000, Mob 9060/12000, NPC 293/512. ServerMinusReady=0. Der Player-Pool war nicht ausgeschöpft.
+- Insgesamt 15 so_Disconnect-1669-Ereignisse bei acht Testidentitäten; sieben erholten sich durch die regulären Handoff-Retries. Das erklärt, warum einzelne frühere Stufen trotz des bereits auftretenden Fehlers ihre Zählprüfung bestanden.
+- Neue CoordRepairLog-Einträge korrelieren zeitlich mit diesen Disconnects. Die dort protokollierten TSStart-Referenz-/Reparaturkoordinaten sind weiterhin kein Beleg für die tatsächlichen ungültigen ShadowStep-Koordinaten.
+- Ergebnis: LOAD RAMP BLOCKED. Stufen oberhalb 1200 und die finale 1600er-Stabilitätsphase wurden nicht bestanden. Der historische 1600er-Nachweis wird dadurch nicht zu einem aktuellen PASS.
+- Danach alle Testdienste gestoppt; Patchhash, 83 Sites und Listener 2000 erneut verifiziert. Keine zusätzlichen Retry-Versuche, keine Map-/Spawn-/Poolanpassung, kein Debugger während dieser Kapazitätsprüfung.
+
+Lokale Nachweise: artifacts/zone-live-20261015/certification/{state.json,ramp/ramp-result.json,ramp/ramp-trace.log,disconnect-evidence/}. Rohdaten und Zugangsdaten bleiben lokal.
+
+## Im Live-Test entdeckter falsch-negativer Logbefund
+
+Die bisherige automatische Logprüfung meldete für diesen fehlgeschlagenen Lauf fälschlich CLEAN. Zwei Ursachen wurden behoben:
+
+1. Die Diagnose-Regeln erkannten die realen Formate `so_Disconnect NAME 1669` und `so_Disconnect[1669]` nicht. NG-ZONE-0023 erkennt beide nun als blockierenden Fehler. Eine erfolgreiche Wiederanmeldung hebt den Befund nicht auf.
+2. LogAnalyzer behielt nur den ersten Treffer je Regel. Eine frühe harmlose TS-Debug-Assertion konnte damit spätere echte NG-CORE-0002-Assertions derselben Datei verdecken. Der Delta-Auditor trennt jetzt die Debug-, KQ-Hinweis- und regulären Zeilengruppen vor dieser Zusammenfassung. Die echten 1669-Assertions werden dadurch ebenfalls sichtbar.
+
+Validierung: Release-Build ohne Fehler/Warnungen; Dateitest mit tatsächlicher Logsuche und Checkpoints prüft historische Einträge, andere Disconnect-Gründe, beide 1669-Formate sowie die Folge Debug -> KQ -> echte Assertion (CLEAN -> REVIEW -> BLOCKED). Erneute Auswertung der echten Laufdaten mit dem ursprünglichen Checkpoint ergibt BLOCKED und nennt die 1669-Einträge sowohl im Assert- als auch im MoreDisconnect-Log. Der ursprüngliche falsche CLEAN-Bericht bleibt als Beleg erhalten; die korrigierte Auswertung liegt separat unter certification/corrected-audit/.
+
+Diese Korrektur behebt die Fehlererkennung, nicht den Server-Disconnect selbst. Für dessen Ursachenbehebung fehlt weiterhin die gezielte Laufzeitaufzeichnung des fehlschlagenden Bewegungs-/Markierungspfads.

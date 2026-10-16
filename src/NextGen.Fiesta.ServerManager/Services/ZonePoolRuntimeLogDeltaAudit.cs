@@ -24,7 +24,8 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
         "NG-ZONE-0015",
         "NG-ZONE-0020",
         "NG-ZONE-0021",
-        "NG-ZONE-0022"
+        "NG-ZONE-0022",
+        "NG-ZONE-0023"
     };
 
     private static readonly string[] BlockingRawPatterns =
@@ -443,7 +444,13 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
     {
         if (lines.Count == 0) return;
 
-        foreach (var issue in _analyzer.Analyze(lines, path))
+        // Analyze exception classes separately: LogAnalyzer keeps only the first
+        // occurrence of each rule. A debug assertion must not hide a later real
+        // assertion (or a KQ warning) with the same NG-CORE-0002 rule code.
+        var classifiedLines = lines.GroupBy(line =>
+            IsKnownTsDebugLuaAssertion("NG-CORE-0002", line) ? 1 :
+            IsKnownKqMakeBufferAssertion("NG-CORE-0002", line) ? 2 : 0);
+        foreach (var issue in classifiedLines.SelectMany(group => _analyzer.Analyze(group, path)))
         {
             var isKnownScriptDebugAssertion = IsKnownTsDebugLuaAssertion(issue.Code, issue.Evidence);
             var isKnownKqMakeBufferAssertion = IsKnownKqMakeBufferAssertion(issue.Code, issue.Evidence);
@@ -541,15 +548,70 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             if (IsKnownTsDebugLuaAssertion("NG-CORE-0001", scriptDebug))
                 throw new InvalidDataException("Falscher Diagnostic-Code wurde fälschlich als Script-Debug freigestellt.");
 
+            VerifyFileClassification(scriptDebug, kqBufferAssert, realAssert);
+
             return new ZonePoolLogDeltaAuditSelfTestResult(
                 true,
-                "LOG DELTA CLASSIFICATION SELFTEST: PASS · [TS-Debug *.lua] Assertions sind Info; exakter KQ W2Z MAKED Buffer-full[0]-Hinweis ist REVIEW; andere NG-CORE-0002 Assertions bleiben blockierend.");
+                "LOG DELTA CLASSIFICATION SELFTEST: PASS · echte Logdateien/Checkpoints: neue 1669-Disconnects blockieren, historische Einträge und andere Disconnect-Gründe nicht; gemischte Debug/KQ/echte Assertions bleiben getrennt erkennbar.");
         }
         catch (Exception ex)
         {
             return new ZonePoolLogDeltaAuditSelfTestResult(
                 false,
                 "LOG DELTA CLASSIFICATION SELFTEST: FAIL · " + ex.Message);
+        }
+    }
+
+    private static void VerifyFileClassification(string scriptDebug, string kqBufferAssert, string realAssert)
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "NextGenLogDeltaSelfTest-" + Guid.NewGuid().ToString("N"));
+        var serverRoot = Path.Combine(tempRoot, "server");
+        var zoneRoot = Path.Combine(serverRoot, "Zone00");
+        Directory.CreateDirectory(zoneRoot);
+        try
+        {
+            var audit = new ZonePoolRuntimeLogDeltaAudit();
+            var log = Path.Combine(zoneRoot, "MoreDisconnectLog2026101523.txt");
+            var checkpoint = Path.Combine(tempRoot, "checkpoint.json");
+            File.WriteAllText(log, "23:00:00 : Char so_Disconnect HISTORICAL 1669\r\n");
+            if (!audit.SaveCheckpoint(serverRoot, checkpoint).Success)
+                throw new InvalidDataException("Logdatei-Checkpoint konnte nicht erstellt werden.");
+            File.AppendAllText(log, "23:01:00 : Char From world\r\n23:01:01 : Char so_Disconnect OTHER 16690\r\n23:01:02 : Char so_Disconnect OTHER 1668\r\n");
+            if (!audit.Audit(serverRoot, checkpoint).Clean)
+                throw new InvalidDataException("Historischer 1669-Eintrag oder anderer Disconnect-Grund blockiert fälschlich.");
+
+            const string liveDisconnect = "23:39:42 : Char so_Disconnect TEST_CLIENT 1669";
+            File.AppendAllText(log, liveDisconnect + "\r\n");
+            var disconnectResult = audit.Audit(serverRoot, checkpoint);
+            if (!disconnectResult.Blocked || disconnectResult.Clean
+                || !disconnectResult.Findings.Any(f => f.Code == "NG-ZONE-0023" && f.Blocking && f.Evidence == liveDisconnect))
+                throw new InvalidDataException("Neuer realer 1669-Disconnect wurde nicht blockierend erkannt.");
+            var analyzer = new LogAnalyzer();
+            if (!analyzer.Analyze(new[] { "23:39:42 : so_Disconnect[1669]" }, log).Any(i => i.Code == "NG-ZONE-0023"))
+                throw new InvalidDataException("1669-Klammerformat wurde nicht erkannt.");
+
+            var mixedCheckpoint = Path.Combine(tempRoot, "mixed-checkpoint.json");
+            if (!audit.SaveCheckpoint(serverRoot, mixedCheckpoint).Success)
+                throw new InvalidDataException("Gemischter Log-Checkpoint konnte nicht erstellt werden.");
+            var assertionLog = Path.Combine(zoneRoot, "Assert2026101523.txt");
+            File.WriteAllText(assertionLog, scriptDebug + "\r\n");
+            if (!audit.Audit(serverRoot, mixedCheckpoint).Clean)
+                throw new InvalidDataException("Alleinige Script-Debugmeldung ist nicht CLEAN.");
+            File.AppendAllText(assertionLog, kqBufferAssert + "\r\n");
+            var kqResult = audit.Audit(serverRoot, mixedCheckpoint);
+            if (!kqResult.ReviewRequired || kqResult.Blocked || kqResult.Clean)
+                throw new InvalidDataException("KQ-Hinweis nach Script-Debugmeldung ist nicht REVIEW.");
+            File.AppendAllText(assertionLog, realAssert + "\r\n");
+            var mixedResult = audit.Audit(serverRoot, mixedCheckpoint);
+            if (!mixedResult.Blocked || mixedResult.Clean
+                || !mixedResult.Findings.Any(f => f.Code == "NG-CORE-0002" && f.Blocking && f.Evidence == realAssert)
+                || !mixedResult.Findings.Any(f => f.Code == "NG-KQ-MAKE-BUFFER" && !f.Blocking)
+                || !mixedResult.Findings.Any(f => f.Code == "NG-SCRIPT-DEBUG" && !f.Blocking))
+                throw new InvalidDataException("Debug-Assertion verdeckt nachfolgende KQ-/echte Assertion in derselben Datei.");
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
         }
     }
 
