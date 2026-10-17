@@ -24,6 +24,8 @@ Außerdem unterschied der alte Leser nicht zwischen einem stillen Socket und ein
 
 Lokale TCP-Integrationstests auf einem dynamischen Loopback-Port prüfen 128 konkurrierende Sender über den echten XOR-/Framingpfad, verworfene und vorab abgebrochene Sendungen ohne XOR-Verschiebung, Wiederaufnahme nach stillem Timeout, Abbruch bei Teilheader/-body sowie korrekt zusammengesetzte fragmentierte Frames. Die Tests verwenden keine Fiesta-Dienste und gehören zum Windows-Smoke. Sie ersetzen die weiterhin ausstehenden Serverlasttests nicht.
 
+Ein weiterer TCP-Test reproduzierte eine verzögerte Fehlerweitergabe: Nach geschlossenem Zone-Socket wartete `Task.WhenAll` weiterhin auf den noch offenen World-Socket. Ein Clientfehler konnte dadurch bis zum Ende der Haltezeit verborgen bleiben. Bei einem Pump-Fehler wird jetzt der andere Pump abgebrochen und der ursprüngliche Fehler sofort weitergegeben. Der Test scheiterte vor der Korrektur am Zwei-Sekunden-Limit und bestand danach. Gegenproben prüfen, dass ein normaler World-Handoff-Abschluss die Zone-Heartbeats weiterlaufen lässt und ein Benutzerabbruch nicht als erfolgreicher Hold gemeldet wird.
+
 ## Login-Stopp
 
 Analysierter Originalstand: SHA-256 `15132FE91F76B61BEFF877F0A80725A909FAB4923CD9C7E9DA76FE87FE1CCF99`.

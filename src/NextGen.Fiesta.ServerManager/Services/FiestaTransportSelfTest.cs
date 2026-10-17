@@ -10,6 +10,52 @@ public static class FiestaTransportSelfTest
     public static async Task RunAsync()
     {
         FiestaMovementProtocol.RunSelfTest();
+        await WithConnection(async (world, worldServer, token) =>
+        {
+            await WithConnection(async (zone, zoneServer, _) =>
+            {
+                var hold = FiestaHeadlessLoadClient.HoldSessionsAsync(world, zone,
+                    TimeSpan.FromMilliseconds(500), null, token);
+                worldServer.Dispose();
+                await Task.Delay(100, token);
+                if (hold.IsCompleted) throw new InvalidDataException("Normal World closure ended a healthy Zone hold.");
+                await zoneServer.GetStream().WriteAsync(new byte[] { 2, 4, 8 }, token);
+                var response = await ReadFrame(zoneServer.GetStream(), token);
+                new FiestaXorCipher(0).TransformInPlace(response);
+                if (!response.SequenceEqual(new byte[] { 5, 8 }))
+                    throw new InvalidDataException("Zone heartbeat stopped after normal World closure.");
+                await hold.WaitAsync(TimeSpan.FromSeconds(2), token);
+            });
+        });
+
+        await WithConnection(async (world, worldServer, token) =>
+        {
+            await WithConnection(async (zone, zoneServer, _) =>
+            {
+                using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                var hold = FiestaHeadlessLoadClient.HoldSessionsAsync(world, zone,
+                    TimeSpan.FromSeconds(8), null, cancellation.Token);
+                cancellation.Cancel();
+                var observed = false;
+                try { await hold.WaitAsync(TimeSpan.FromSeconds(2), token); }
+                catch (OperationCanceledException) { observed = true; }
+                if (!observed) throw new InvalidDataException("Caller cancellation was reported as a successful hold.");
+            });
+        });
+
+        await WithConnection(async (world, worldServer, token) =>
+        {
+            await WithConnection(async (zone, zoneServer, _) =>
+            {
+                var hold = FiestaHeadlessLoadClient.HoldSessionsAsync(world, zone,
+                    TimeSpan.FromSeconds(8), null, token);
+                zoneServer.Dispose();
+                var failedPromptly = false;
+                try { await hold.WaitAsync(TimeSpan.FromSeconds(2), token); }
+                catch (EndOfStreamException) { failedPromptly = true; }
+                if (!failedPromptly) throw new InvalidDataException("Zone disconnect was hidden behind the idle World pump.");
+            });
+        });
         await WithConnection(async (client, server, token) =>
         {
             const int count = 128;

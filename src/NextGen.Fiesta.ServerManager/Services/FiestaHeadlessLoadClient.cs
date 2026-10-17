@@ -1378,7 +1378,7 @@ public sealed class FiestaHeadlessLoadClient
     private static bool IsIgnorablePostReadyWorldFrameTermination(InvalidDataException ex)
         => ex.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase);
 
-    private static async Task HoldSessionsAsync(
+    internal static async Task HoldSessionsAsync(
         FiestaWireConnection worldConnection,
         FiestaWireConnection zoneConnection,
         TimeSpan duration,
@@ -1404,9 +1404,23 @@ public sealed class FiestaHeadlessLoadClient
             zoneHeartbeatProgress,
             holdCts.Token);
 
+        async Task CancelSiblingOnFailure(Task pump)
+        {
+            try { await pump; }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Task.WhenAll alone waits for the other pump's entire hold even
+                // when Zone has already disconnected. Wake it and retain the
+                // original non-cancellation failure. Normal World handoff closure
+                // remains allowed and must not cancel a healthy Zone session.
+                holdCts.Cancel();
+                throw;
+            }
+        }
+
         try
         {
-            await Task.WhenAll(worldPump, zonePump);
+            await Task.WhenAll(CancelSiblingOnFailure(worldPump), CancelSiblingOnFailure(zonePump));
         }
         catch (OperationCanceledException) when (holdCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
