@@ -14,6 +14,16 @@ Der Mitschnitt enthält außerdem Zielwahl `CH9/1` mit zwei Body-Bytes, fünf `C
 
 Noch erforderlich: sichere aktuelle Wege, kleiner Bewegungspilot mit serverseitiger Positionsbestätigung, aktuelle Zielhandles und bestätigte Kampfeffekte, anschließend skalierte aktive Last. Heartbeat-Aktivität und erfolgreich gesendete Pakete allein beweisen weder Bewegung noch Kampf.
 
+Die Bewegungs-/Stopppakete sind inzwischen als reine Encoder implementiert und bytegenau gegen die anonymen Originalfixtures geprüft. Ein Decoder liest die 22-Byte-Bewegungsbroadcasts mit aktuellem Handle, Von-/Nach-Koordinaten und Geschwindigkeit. Ein fremder Mob-Broadcast wird dadurch noch nicht zur Bestätigung eines Testspielers: Die Zuordnung zur aktuellen Sitzung und ein Live-Pilot fehlen weiterhin.
+
+## Transport für aktive Last
+
+Heartbeat und aktive Befehle müssen denselben XOR-Zustand und dieselbe Sendereihenfolge verwenden. Die Verbindung serialisiert jetzt Verschlüsselung und vollständigen Schreibvorgang gemeinsam. Ein abgebrochener Schreibvorgang nach Fortschreiben des XOR-Zustands schließt die Verbindung; sie kann nicht unbemerkt mit falschem Verschlüsselungszustand weiterverwendet werden. Ungültige Paketlängen werden vor der Verschlüsselung verworfen.
+
+Außerdem unterschied der alte Leser nicht zwischen einem stillen Socket und einem Timeout mitten im Paket. Im zweiten Fall waren bereits Bytes verbraucht; der nächste Leseversuch konnte den Rest als neues Paket interpretieren. Nun bleibt nur ein Timeout vor dem ersten Frame-Byte wiederaufnehmbar. Ein unvollständiger Header oder Body nach Fristablauf beendet die Verbindung mit einem Fehler.
+
+Lokale TCP-Integrationstests auf einem dynamischen Loopback-Port prüfen 128 konkurrierende Sender über den echten XOR-/Framingpfad, verworfene und vorab abgebrochene Sendungen ohne XOR-Verschiebung, Wiederaufnahme nach stillem Timeout, Abbruch bei Teilheader/-body sowie korrekt zusammengesetzte fragmentierte Frames. Die Tests verwenden keine Fiesta-Dienste und gehören zum Windows-Smoke. Sie ersetzen die weiterhin ausstehenden Serverlasttests nicht.
+
 ## Login-Stopp
 
 Analysierter Originalstand: SHA-256 `15132FE91F76B61BEFF877F0A80725A909FAB4923CD9C7E9DA76FE87FE1CCF99`.
