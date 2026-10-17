@@ -102,6 +102,9 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(loadRampTimingSelfTest.Detail);
             Log("LOAD_RAMP_TIMING_SELFTEST PASS · " + loadRampTimingSelfTest.Detail);
 
+            LoadProcessSampler.RunSelfTest();
+            Log("LOAD_PROCESS_SAMPLER_SELFTEST PASS");
+
             var logDeltaClassificationSelfTest = ZonePoolRuntimeLogDeltaAudit.RunClassificationSelfTest();
             if (!logDeltaClassificationSelfTest.Success)
                 throw new InvalidOperationException(logDeltaClassificationSelfTest.Detail);
