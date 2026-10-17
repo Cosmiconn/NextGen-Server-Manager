@@ -1378,7 +1378,7 @@ public sealed class FiestaHeadlessLoadClient
     private static bool IsIgnorablePostReadyWorldFrameTermination(InvalidDataException ex)
         => ex.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase);
 
-    private static async Task HoldSessionsAsync(
+    internal static async Task HoldSessionsAsync(
         FiestaWireConnection worldConnection,
         FiestaWireConnection zoneConnection,
         TimeSpan duration,
@@ -1404,9 +1404,23 @@ public sealed class FiestaHeadlessLoadClient
             zoneHeartbeatProgress,
             holdCts.Token);
 
+        async Task CancelSiblingOnFailure(Task pump)
+        {
+            try { await pump; }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Task.WhenAll alone waits for the other pump's entire hold even
+                // when Zone has already disconnected. Wake it and retain the
+                // original non-cancellation failure. Normal World handoff closure
+                // remains allowed and must not cancel a healthy Zone session.
+                holdCts.Cancel();
+                throw;
+            }
+        }
+
         try
         {
-            await Task.WhenAll(worldPump, zonePump);
+            await Task.WhenAll(CancelSiblingOnFailure(worldPump), CancelSiblingOnFailure(zonePump));
         }
         catch (OperationCanceledException) when (holdCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -2273,6 +2287,7 @@ internal sealed class FiestaWireConnection : IAsyncDisposable
     private readonly TcpClient _client;
     private readonly NetworkStream _stream;
     private readonly FiestaXorCipher _clientToServerCipher;
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
 
     private FiestaWireConnection(TcpClient client, NetworkStream stream, FiestaXorCipher cipher)
     {
@@ -2324,18 +2339,44 @@ internal sealed class FiestaWireConnection : IAsyncDisposable
 
     public async Task SendDecryptedPayloadAsync(byte[] decryptedPayload, CancellationToken cancellationToken)
     {
-        if (decryptedPayload.Length < 2) throw new ArgumentException("Payload ist zu kurz.", nameof(decryptedPayload));
+        if (decryptedPayload.Length is < 2 or > ushort.MaxValue)
+            throw new ArgumentException("Payload muss 2..65535 Byte enthalten.", nameof(decryptedPayload));
+        // Heartbeats and active load share both the cipher position and wire order.
+        // Protect the entire operation, not just the NetworkStream write.
         var encrypted = decryptedPayload.ToArray();
-        _clientToServerCipher.TransformInPlace(encrypted);
-        var frame = FramePayload(encrypted);
-        await _stream.WriteAsync(frame, cancellationToken);
-        await _stream.FlushAsync(cancellationToken);
+        await _sendGate.WaitAsync(cancellationToken);
+        var cipherAdvanced = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _clientToServerCipher.TransformInPlace(encrypted);
+            cipherAdvanced = true;
+            var frame = FramePayload(encrypted);
+            await _stream.WriteAsync(frame, cancellationToken);
+            await _stream.FlushAsync(cancellationToken);
+        }
+        catch
+        {
+            // A partially written/cancelled frame cannot be retried on this cipher
+            // stream. Close it so another sender cannot silently continue out of sync.
+            if (cipherAdvanced) _client.Dispose();
+            throw;
+        }
+        finally { _sendGate.Release(); }
     }
 
     public async Task<FiestaPacket> ReadPacketAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var payload = await ReadFrameAsync(_stream, timeout, cancellationToken);
-        return FiestaPacket.FromPayload(payload);
+        try
+        {
+            var payload = await ReadFrameAsync(_stream, timeout, cancellationToken);
+            return FiestaPacket.FromPayload(payload);
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException)
+        {
+            _client.Dispose();
+            throw;
+        }
     }
 
     internal static byte[] FramePayload(ReadOnlySpan<byte> payload)
@@ -2364,10 +2405,12 @@ internal sealed class FiestaWireConnection : IAsyncDisposable
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(timeout);
+        var frameStarted = false;
         try
         {
             var first = new byte[1];
             await ReadExactlyAsync(stream, first, timeoutCts.Token);
+            frameStarted = true;
             int length;
             if (first[0] == 0)
             {
@@ -2387,6 +2430,8 @@ internal sealed class FiestaWireConnection : IAsyncDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            if (frameStarted)
+                throw new IOException("Fiesta-Frame begann, wurde aber nicht vollständig empfangen; Verbindung ist nicht fortsetzbar.");
             throw new TimeoutException($"Fiesta-Paket wurde nicht innerhalb von {timeout.TotalSeconds:N1}s vollständig empfangen.");
         }
     }

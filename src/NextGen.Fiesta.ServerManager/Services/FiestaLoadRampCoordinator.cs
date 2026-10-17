@@ -141,16 +141,18 @@ public sealed class FiestaLoadRampCoordinator
         var ready = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var failed = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var lastZoneHeartbeatRoundTrip = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+        var firstReady = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         var lastClientProgress = new ConcurrentDictionary<string, FiestaHeadlessClientProgress>(StringComparer.OrdinalIgnoreCase);
         var deferredZoneAdmissions = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var tasks = new List<Task<FiestaHeadlessProbeResult>>(finalTarget);
         var stageResults = new List<FiestaLoadRampStageResult>(targets.Length);
+        var stabilityResults = new List<FiestaLoadStabilitySample>();
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         Trace("BASELINE",
             $"CredentialStartIndex={options.CredentialStartIndex}; PriorityCredentialNumber={options.PriorityCredentialNumber}; " +
             $"ZonePlayer={baselinePlayers}; PoolLimit={baseline.Pools.PlayerLimit}; " +
-            $"Mode={(localDiagnostic ? "LOCAL_NON_CERTIFYING_DEBUG" : "CERTIFIED_1600")}; " +
+            $"Mode={(localDiagnostic ? "LOCAL_NON_CERTIFYING_DEBUG" : $"STRICT_CAPACITY_{finalTarget}")}; " +
             $"ExpectedZonePort={options.ClientOptions.RequiredZonePort?.ToString() ?? "<world-directed>"}; " +
             $"Listener={(localDiagnostic ? "<non-certified>" : listenerMax.ToString())}; " +
             $"DelayedZoneReentryAttempts={options.ClientOptions.DelayedZoneReentryAttempts}; " +
@@ -265,6 +267,7 @@ public sealed class FiestaLoadRampCoordinator
 
                             if (p.Stage is FiestaLoadClientStage.ClientReady or FiestaLoadClientStage.Holding)
                             {
+                                firstReady.TryAdd(p.Username, p.TimestampUtc);
                                 ready.TryAdd(p.Username, 0);
                             }
 
@@ -465,6 +468,22 @@ public sealed class FiestaLoadRampCoordinator
                     }
 
                     samples++;
+                    var sampledUtc = DateTimeOffset.UtcNow;
+                    var staleHeartbeats = ready.Keys.Count(username =>
+                        !HasRecentHeartbeat(sampledUtc, firstReady.GetValueOrDefault(username),
+                            lastZoneHeartbeatRoundTrip.TryGetValue(username, out var heartbeat) ? heartbeat : null,
+                            options.MaximumHeartbeatAge));
+                    var observedHeartbeats = ready.Keys.Count(username =>
+                        lastZoneHeartbeatRoundTrip.TryGetValue(username, out var heartbeat)
+                        && sampledUtc - heartbeat <= options.MaximumHeartbeatAge);
+                    stabilityResults.Add(new FiestaLoadStabilitySample(sampledUtc, ready.Count,
+                        observation.Pools.PlayerCount, observation.Pools.PlayerLimit,
+                        observedHeartbeats, staleHeartbeats));
+                    Trace("STABILITY-SAMPLE", $"Ready={ready.Count}; ShinePlayer={observation.Pools.PlayerCount}; " +
+                        $"PoolLimit={observation.Pools.PlayerLimit}; FreshHeartbeats={observedHeartbeats}; StaleHeartbeats={staleHeartbeats}");
+                    if (options.RequireFreshHeartbeats && staleHeartbeats > 0)
+                        return BuildFailure(baselinePlayers, stageResults, ready.Count, failed,
+                            $"Stabilität fehlgeschlagen: {staleHeartbeats} Clients ohne frischen Zone-Heartbeat.");
                     if (observation.Pools.PlayerCount != finalExpected || ready.Count != finalTarget)
                     {
                         return BuildFailure(
@@ -503,6 +522,9 @@ public sealed class FiestaLoadRampCoordinator
                 FinalReadyClients = ready.Count,
                 FinalExpectedPlayers = baselinePlayers + finalTarget,
                 StageResults = stageResults,
+                StabilitySamples = stabilityResults,
+                RequestedStabilitySeconds = options.FinalStabilityDuration.TotalSeconds,
+                RequiredFreshHeartbeats = options.RequireFreshHeartbeats,
                 Detail =
                     $"{(localDiagnostic ? "LOKAL-DIAGNOSE PASS (NICHT ZERTIFIZIERT)" : "LOAD RAMP PASS")} · " +
                     $"{finalTarget:N0} echte Headless-Sessions · " +
@@ -682,6 +704,12 @@ public sealed class FiestaLoadRampCoordinator
         };
     }
 
+    internal static bool HasRecentHeartbeat(DateTimeOffset now, DateTimeOffset readyAt,
+        DateTimeOffset? lastHeartbeat, TimeSpan maximumAge)
+        => lastHeartbeat.HasValue
+            ? now - lastHeartbeat.Value <= maximumAge
+            : readyAt != default && now - readyAt <= maximumAge;
+
     private static FiestaHeadlessProbeOptions CloneClientOptions(
         FiestaHeadlessProbeOptions source,
         TimeSpan holdDuration)
@@ -722,6 +750,11 @@ public sealed class FiestaLoadRampOptions
                 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400,
                 1450, 1500, 1510, 1550, 1600 };
 
+    // Extends the existing admission benchmark without weakening its runtime,
+    // listener, identity or exact-count gates. The default remains the 1600 baseline.
+    public static IReadOnlyList<int> CapacityStageTargets { get; } =
+        DiagnosticStageTargets.Concat(new[] { 1700, 1800, 1900, 1950, 2000 }).ToArray();
+
     public string TargetZoneExePath { get; init; } = string.Empty;
     public bool Zone01Diagnostic { get; init; } // Preserve Zone01 diagnostic mode.
     public bool Zone00Diagnostic { get; init; } // Same strict path, authentic map routing.
@@ -760,6 +793,8 @@ public sealed class FiestaLoadRampOptions
     public TimeSpan SessionHoldDuration { get; init; } = TimeSpan.FromHours(2);
     public TimeSpan FinalStabilityDuration { get; init; } = TimeSpan.FromMinutes(5);
     public TimeSpan StabilityPollInterval { get; init; } = TimeSpan.FromSeconds(5);
+    public bool RequireFreshHeartbeats { get; init; }
+    public TimeSpan MaximumHeartbeatAge { get; init; } = TimeSpan.FromSeconds(90);
 
     public void Validate()
     {
@@ -812,6 +847,10 @@ public sealed class FiestaLoadRampOptions
         {
             throw new ArgumentException("Rampenzeiten enthalten ungültige Werte.");
         }
+        if (MaximumHeartbeatAge <= TimeSpan.Zero)
+            throw new ArgumentException("MaximumHeartbeatAge muss positiv sein.");
+        if (RequireFreshHeartbeats && FinalStabilityDuration <= MaximumHeartbeatAge)
+            throw new ArgumentException("Die Stabilitätsphase muss länger als das erste Heartbeat-Fenster sein.");
 
         var requiredHold = CalculateRequiredSessionHoldDuration();
         if (SessionHoldDuration <= requiredHold)
@@ -864,6 +903,26 @@ public sealed class FiestaLoadRampOptions
     {
         try
         {
+            var now = DateTimeOffset.UtcNow;
+            var heartbeatAge = TimeSpan.FromSeconds(90);
+            if (!FiestaLoadRampCoordinator.HasRecentHeartbeat(now, now, null, heartbeatAge)
+                || FiestaLoadRampCoordinator.HasRecentHeartbeat(now, now.AddMinutes(-2), null, heartbeatAge)
+                || FiestaLoadRampCoordinator.HasRecentHeartbeat(now, now.AddHours(-1), now.AddMinutes(-2), heartbeatAge)
+                || !FiestaLoadRampCoordinator.HasRecentHeartbeat(now, now.AddHours(-1), now.AddSeconds(-30), heartbeatAge))
+                throw new InvalidDataException("Heartbeat gate must reject missing/stale responses after the admission grace interval.");
+            var capacity = new FiestaLoadRampOptions
+            {
+                StageTargets = CapacityStageTargets,
+                ClientStartInterval = TimeSpan.FromSeconds(2),
+                StageReadyTimeout = TimeSpan.FromMinutes(3),
+                SessionHoldDuration = TimeSpan.FromHours(4),
+                FinalStabilityDuration = TimeSpan.FromMinutes(30)
+            };
+            if (!CapacityStageTargets.Take(DiagnosticStageTargets.Count).SequenceEqual(DiagnosticStageTargets)
+                || CapacityStageTargets[^1] != ZonePoolOfflineWriterSelfTest.PlayerTarget
+                || CapacityStageTargets.Distinct().Count() != CapacityStageTargets.Count
+                || capacity.CalculateRequiredSessionHoldDuration() >= capacity.SessionHoldDuration)
+                throw new InvalidDataException("2000er-Profil muss die vollständige 1600er-Basis und genügend Haltezeit erhalten.");
             var single = new FiestaLoadRampOptions
             {
                 StageTargets = new[] { 1 },
@@ -1070,11 +1129,17 @@ public sealed class FiestaLoadRampResult
     public int FailedClientCount { get; init; }
     public IReadOnlyList<string> FailedClientSamples { get; init; } = Array.Empty<string>();
     public IReadOnlyList<FiestaLoadRampStageResult> StageResults { get; init; } = Array.Empty<FiestaLoadRampStageResult>();
+    public IReadOnlyList<FiestaLoadStabilitySample> StabilitySamples { get; init; } = Array.Empty<FiestaLoadStabilitySample>();
+    public double RequestedStabilitySeconds { get; init; }
+    public bool RequiredFreshHeartbeats { get; init; }
     public string Detail { get; init; } = string.Empty;
 
     public static FiestaLoadRampResult CreateBlocked(string detail)
         => new() { Blocked = true, Status = "BLOCKED", Detail = "LOAD RAMP BLOCKED · " + detail };
 }
+
+public sealed record FiestaLoadStabilitySample(DateTimeOffset AtUtc, int ReadyClients,
+    int ServerPlayers, int PlayerLimit, int FreshHeartbeats, int StaleHeartbeats);
 
 public sealed class FiestaLoadRampStageResult
 {

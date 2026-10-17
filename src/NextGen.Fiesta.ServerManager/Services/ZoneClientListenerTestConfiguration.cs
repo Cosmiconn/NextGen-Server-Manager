@@ -166,14 +166,16 @@ public sealed class ZoneClientListenerTestConfiguration
         var manifestPath = GetManifestPath(serverInfoPath);
         var appliedAuditBackupPath = GetAppliedAuditBackupPath(serverInfoPath);
         if (File.Exists(appliedAuditBackupPath))
-            appliedAuditBackupPath = serverInfoPath + ".nextgen-zone-listener-rollback-applied-" + Guid.NewGuid().ToString("N") + ".bak";
+            appliedAuditBackupPath = GetAppliedAuditBackupPath(serverInfoPath)[..^4] + "-" + Guid.NewGuid().ToString("N") + ".bak";
 
         if (!File.Exists(serverInfoPath) || !File.Exists(backupPath) || !File.Exists(manifestPath))
             return Failed("Listener-ServerInfo, Backup oder Manifest fehlt. Automatischer Rollback wird verweigert.");
         ZoneClientListenerConfigurationMetadata? manifest;
+        byte[] originalMetadata;
         try
         {
-            manifest = JsonSerializer.Deserialize<ZoneClientListenerConfigurationMetadata>(File.ReadAllBytes(manifestPath));
+            originalMetadata = File.ReadAllBytes(manifestPath);
+            manifest = JsonSerializer.Deserialize<ZoneClientListenerConfigurationMetadata>(originalMetadata);
         }
         catch (Exception ex)
         {
@@ -213,6 +215,7 @@ public sealed class ZoneClientListenerTestConfiguration
 
         var stagePath = serverInfoPath + ".nextgen-zone-listener-rollback-stage-" + Guid.NewGuid().ToString("N");
         var manifestTemp = manifestPath + ".tmp-" + Guid.NewGuid().ToString("N");
+        var replaced = false;
         try
         {
             WriteDurable(stagePath, File.ReadAllBytes(backupPath));
@@ -229,6 +232,7 @@ public sealed class ZoneClientListenerTestConfiguration
                 throw new IOException("Zone-Prozess wurde während des Listener-Rollback-Stagings gestartet: " + FormatPids(processCheck.ProcessIds));
 
             File.Replace(stagePath, serverInfoPath, appliedAuditBackupPath, ignoreMetadataErrors: false);
+            replaced = true;
 
             var restoredHash = Sha256File(serverInfoPath);
             var auditHash = Sha256File(appliedAuditBackupPath);
@@ -276,7 +280,13 @@ public sealed class ZoneClientListenerTestConfiguration
         {
             SafeDelete(stagePath);
             SafeDelete(manifestTemp);
-            return Failed("Listener-Rollback fehlgeschlagen: " + ex.Message, serverInfoPath: serverInfoPath, backupPath: backupPath, manifestPath: manifestPath);
+            var recovery = replaced
+                ? ZoneRollbackRecovery.RestorePreviousFile(serverInfoPath, appliedAuditBackupPath,
+                    currentHash, backupHash, manifestPath, originalMetadata)
+                : new ZoneRollbackRecovery.Result(false, "ServerInfo wurde nicht ausgetauscht.");
+            return Failed("Listener-Rollback fehlgeschlagen: " + ex.Message + " " + recovery.Detail,
+                emergencyRollbackAttempted: replaced, emergencyRollbackSucceeded: recovery.Success,
+                serverInfoPath: serverInfoPath, backupPath: backupPath, manifestPath: manifestPath);
         }
     }
 
@@ -310,7 +320,7 @@ public sealed class ZoneClientListenerTestConfiguration
             || metadata.NewMaxAccept != CertifiedMaxAccept
             || metadata.CertifiedZoneSha256 != ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256
             || string.IsNullOrWhiteSpace(audit)
-            || !Path.GetFullPath(audit).StartsWith(GetAppliedAuditBackupPath(info).Replace(".bak", ""), StringComparison.OrdinalIgnoreCase)
+            || !IsAppliedAuditBackupPath(info, audit)
             || !File.Exists(audit))
             return Failed("Listener ROLLED_BACK-Manifest und Auditbackup passen nicht zum geprüften Ziel.");
 
@@ -868,6 +878,28 @@ public sealed class ZoneClientListenerTestConfiguration
 
     private static string GetManifestPath(string serverInfoPath)
         => serverInfoPath + ".nextgen-zone-listener.json";
+
+    private static bool IsAppliedAuditBackupPath(string serverInfoPath, string auditPath)
+    {
+        var fullPath = Path.GetFullPath(auditPath);
+        var firstAudit = GetAppliedAuditBackupPath(serverInfoPath);
+        if (PathEquals(fullPath, firstAudit))
+            return true;
+
+        // Accept prior versions' second-cycle name as well as the canonical name.
+        foreach (var prefix in new[]
+        {
+            firstAudit[..^4] + "-",
+            serverInfoPath + ".nextgen-zone-listener-rollback-applied-"
+        })
+        {
+            if (fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && fullPath.EndsWith(".bak", StringComparison.OrdinalIgnoreCase)
+                && Guid.TryParseExact(fullPath[prefix.Length..^4], "N", out _))
+                return true;
+        }
+        return false;
+    }
 
     private static string GetAppliedAuditBackupPath(string serverInfoPath)
         => serverInfoPath + ".nextgen-zone-listener-applied.bak";
