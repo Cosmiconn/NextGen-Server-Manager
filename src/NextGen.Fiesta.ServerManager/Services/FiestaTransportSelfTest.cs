@@ -10,6 +10,7 @@ public static class FiestaTransportSelfTest
     public static async Task RunAsync()
     {
         FiestaMovementProtocol.RunSelfTest();
+        await RunMovementPilotTestsAsync();
         await WithConnection(async (client, server, token) =>
         {
             var waiting = FiestaHeadlessLoadClient.WaitForInitialZoneLoginAckAsync(
@@ -174,6 +175,128 @@ public static class FiestaTransportSelfTest
             var packet = await read;
             if (packet.Header != 2 || packet.Type != 4 || !packet.Body.SequenceEqual(new byte[] { 12, 34 }))
                 throw new InvalidDataException("Valid fragmented frame was not reassembled.");
+        });
+    }
+
+    private static async Task RunMovementPilotTestsAsync()
+    {
+        var actor = new FiestaZoneActorIdentity(12000, 100, 200);
+        var plan = new FiestaMovementPilotPlan(100, 200, 110, 200)
+        {
+            StartDelay = TimeSpan.FromMilliseconds(20),
+            TravelDuration = TimeSpan.FromMilliseconds(250),
+            SettleDuration = TimeSpan.FromMilliseconds(40)
+        };
+        foreach (var invalid in new[]
+        {
+            plan with { EndX = 100 }, plan with { EndX = 111 },
+            plan with { EndX = uint.MaxValue }, plan with { TravelDuration = TimeSpan.Zero },
+            plan with { StartDelay = TimeSpan.FromSeconds(-1) }
+        })
+        {
+            var rejected = false;
+            try { invalid.Validate(TimeSpan.FromSeconds(1)); }
+            catch (ArgumentException) { rejected = true; }
+            if (!rejected) throw new InvalidDataException("Invalid movement pilot plan was accepted.");
+        }
+        var shortHoldRejected = false;
+        try { plan.Validate(TimeSpan.FromMilliseconds(100)); }
+        catch (ArgumentException) { shortHoldRejected = true; }
+        if (!shortHoldRejected) throw new InvalidDataException("Movement pilot outlives its session hold.");
+        var rampRejected = false;
+        try
+        {
+            new FiestaLoadRampOptions
+            {
+                ClientOptions = new FiestaHeadlessProbeOptions { MovementPilot = plan }
+            }.Validate();
+        }
+        catch (ArgumentException ex) when (ex.Message.Contains("individual client invocation")) { rampRejected = true; }
+        if (!rampRejected) throw new InvalidDataException("Ramp silently discarded the actor-specific movement plan.");
+
+        await WithConnection(async (world, worldServer, token) =>
+        {
+            await WithConnection(async (zone, zoneServer, _) =>
+            {
+                var hold = FiestaHeadlessLoadClient.HoldSessionsAsync(world, zone,
+                    TimeSpan.FromMilliseconds(800), null, token, plan, actor);
+                var cipher = new FiestaXorCipher(0);
+                var run = await ReadFrame(zoneServer.GetStream(), token);
+                cipher.TransformInPlace(run);
+                if (!run.SequenceEqual(FiestaMovementProtocol.Run(100, 200, 110, 200)))
+                    throw new InvalidDataException("Movement pilot did not send the planned run first.");
+                await zoneServer.GetStream().WriteAsync(new byte[] { 2, 4, 8 }, token);
+                var remaining = new List<byte[]>();
+                for (var i = 0; i < 2; i++)
+                {
+                    var payload = await ReadFrame(zoneServer.GetStream(), token);
+                    cipher.TransformInPlace(payload);
+                    remaining.Add(payload);
+                }
+                if (remaining.Count(p => p.SequenceEqual(new byte[] { 5, 8 })) != 1
+                    || remaining.Count(p => p.SequenceEqual(FiestaMovementProtocol.Stop(110, 200))) != 1)
+                    throw new InvalidDataException("Movement/heartbeat frame order or XOR state was corrupted.");
+                var evidence = await hold;
+                if (evidence is null || evidence.ActorHandle != actor.Handle
+                    || evidence.StartX != 100 || evidence.EndX != 110
+                    || evidence.StopSentUtc < evidence.RunSentUtc || evidence.ServerPositionVerified)
+                    throw new InvalidDataException("Movement send evidence was missing or claimed server acceptance.");
+            });
+        });
+
+        await WithConnection(async (world, worldServer, token) =>
+        {
+            await WithConnection(async (zone, zoneServer, _) =>
+            {
+                var rejected = false;
+                try
+                {
+                    await FiestaHeadlessLoadClient.HoldSessionsAsync(world, zone,
+                        TimeSpan.FromSeconds(1), null, token, plan, actor with { LoginX = 99 });
+                }
+                catch (InvalidOperationException) { rejected = true; }
+                if (!rejected || zoneServer.Available != 0)
+                    throw new InvalidDataException("Mismatched current login position allowed movement traffic.");
+            });
+        });
+
+        await WithConnection(async (world, worldServer, token) =>
+        {
+            await WithConnection(async (zone, zoneServer, _) =>
+            {
+                var hold = FiestaHeadlessLoadClient.HoldSessionsAsync(world, zone,
+                    TimeSpan.FromSeconds(8), null, token,
+                    plan with { TravelDuration = TimeSpan.FromSeconds(3) }, actor);
+                await ReadFrame(zoneServer.GetStream(), token);
+                await zoneServer.GetStream().WriteAsync(new byte[] { 10, 27, 32, 100, 0, 0, 0, 200, 0, 0, 0 }, token);
+                var rejected = false;
+                try { await hold.WaitAsync(TimeSpan.FromSeconds(2), token); }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("Zone rejected movement")) { rejected = true; }
+                if (!rejected) throw new InvalidDataException("Server movement rejection did not end the pilot promptly.");
+                // Hold has awaited the cancelled sender. The caller owns and
+                // disposes the Zone lease after this failed hold returns.
+                if (zoneServer.Available != 0)
+                    throw new InvalidDataException("Pilot continued sending after a server rejection.");
+            });
+        });
+
+        await WithConnection(async (world, worldServer, token) =>
+        {
+            await WithConnection(async (zone, zoneServer, _) =>
+            {
+                using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                var hold = FiestaHeadlessLoadClient.HoldSessionsAsync(world, zone,
+                    TimeSpan.FromSeconds(8), null, cancellation.Token,
+                    plan with { TravelDuration = TimeSpan.FromSeconds(3) }, actor);
+                await ReadFrame(zoneServer.GetStream(), token);
+                cancellation.Cancel();
+                var cancelled = false;
+                try { await hold.WaitAsync(TimeSpan.FromSeconds(2), token); }
+                catch (OperationCanceledException) { cancelled = true; }
+                if (!cancelled) throw new InvalidDataException("Cancelled pilot produced a successful result.");
+                if (await zoneServer.GetStream().ReadAsync(new byte[1], token) != 0)
+                    throw new InvalidDataException("Cancelled pilot sent a later stop command.");
+            });
         });
     }
 

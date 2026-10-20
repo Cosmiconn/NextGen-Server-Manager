@@ -9,7 +9,8 @@ namespace NextGen.Fiesta.ServerManager.Services;
 
 /// <summary>
 /// Minimal NA2016 client used only for controlled load testing against the user's own server.
-/// It follows the real Login -> World -> Zone protocol path and intentionally does not implement gameplay.
+/// It follows the real Login -> World -> Zone protocol path. Gameplay is disabled
+/// by default; an explicit short movement pilot records sends, not server acceptance.
 /// Server -> client packets are plaintext. Client -> server packets use the 499-byte NA2016 XOR stream.
 /// </summary>
 public sealed class FiestaHeadlessLoadClient
@@ -382,10 +383,11 @@ public sealed class FiestaHeadlessLoadClient
                 "NC_MAP_LOGINCOMPLETE_CMD CH6/3 gesendet");
 
             var holdFor = options.HoldDuration;
+            FiestaMovementPilotCommands? movementCommands = null;
             if (holdFor > TimeSpan.Zero)
             {
                 SetStage(FiestaLoadClientStage.Holding);
-                await HoldSessionsAsync(
+                movementCommands = await HoldSessionsAsync(
                     worldSession.Connection,
                     zoneConnection,
                     holdFor,
@@ -395,7 +397,7 @@ public sealed class FiestaHeadlessLoadClient
                         FiestaLoadClientStage.Holding,
                         heartbeatDetail,
                         DateTimeOffset.UtcNow)),
-                    cancellationToken);
+                    cancellationToken, options.MovementPilot, zoneActor);
             }
 
             SetStage(FiestaLoadClientStage.Completed);
@@ -410,6 +412,7 @@ public sealed class FiestaHeadlessLoadClient
                 RandomId = randomId,
                 CharacterCount = characterCount,
                 ZoneActor = zoneActor,
+                MovementCommands = movementCommands,
                 Detail = $"HEADLESS CLIENT PASS · Login/World/Zone vollständig · Charakter '{credential.CharacterName}' · Zone {zone.Host}:{zone.Port}."
             };
         }
@@ -1382,15 +1385,19 @@ public sealed class FiestaHeadlessLoadClient
     private static bool IsIgnorablePostReadyWorldFrameTermination(InvalidDataException ex)
         => ex.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase);
 
-    internal static async Task HoldSessionsAsync(
+    internal static async Task<FiestaMovementPilotCommands?> HoldSessionsAsync(
         FiestaWireConnection worldConnection,
         FiestaWireConnection zoneConnection,
         TimeSpan duration,
         Action<string>? zoneHeartbeatProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FiestaMovementPilotPlan? movementPilot = null,
+        FiestaZoneActorIdentity? zoneActor = null)
     {
+        movementPilot?.Validate(duration);
+        movementPilot?.VerifyActor(zoneActor);
         if (duration <= TimeSpan.Zero)
-            return;
+            return null;
 
         using var holdCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         holdCts.CancelAfter(duration);
@@ -1406,7 +1413,8 @@ public sealed class FiestaHeadlessLoadClient
             "Zone",
             allowRemoteClose: false,
             zoneHeartbeatProgress,
-            holdCts.Token);
+            holdCts.Token,
+            rejectMovementFailure: movementPilot is not null);
 
         async Task CancelSiblingOnFailure(Task pump)
         {
@@ -1422,14 +1430,25 @@ public sealed class FiestaHeadlessLoadClient
             }
         }
 
+        var worldTask = CancelSiblingOnFailure(worldPump);
+        var zoneTask = CancelSiblingOnFailure(zonePump);
+        var movementTask = movementPilot is null ? null
+            : FiestaMovementPilot.SendAsync(zoneConnection, zoneActor!, movementPilot, holdCts.Token);
         try
         {
-            await Task.WhenAll(CancelSiblingOnFailure(worldPump), CancelSiblingOnFailure(zonePump));
+            var tasks = new List<Task> { worldTask, zoneTask };
+            if (movementTask is not null) tasks.Add(CancelSiblingOnFailure(movementTask));
+            await Task.WhenAll(tasks);
         }
         catch (OperationCanceledException) when (holdCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             // Expected end of the requested hold interval.
         }
+        cancellationToken.ThrowIfCancellationRequested();
+        if (movementTask is null) return null;
+        if (!movementTask.IsCompletedSuccessfully)
+            throw new InvalidOperationException("Session ended before the complete movement pilot interval.");
+        return await movementTask;
     }
 
     private static async Task PumpSessionAsync(
@@ -1437,7 +1456,8 @@ public sealed class FiestaHeadlessLoadClient
         string role,
         bool allowRemoteClose,
         Action<string>? heartbeatProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool rejectMovementFailure = false)
     {
         var serverHeartbeatRequests = 0;
         DateTimeOffset? lastServerHeartbeatUtc = null;
@@ -1485,6 +1505,16 @@ public sealed class FiestaHeadlessLoadClient
                 var packet = await connection.ReadPacketAsync(
                     TimeSpan.FromSeconds(45),
                     cancellationToken);
+
+                if (rejectMovementFailure && packet.Header == 8 && packet.Type == 27)
+                {
+                    if (packet.Body.Length != 8)
+                        throw new InvalidDataException("NA2016 movement rejection must contain 8 body bytes.");
+                    throw new InvalidOperationException(
+                        $"Zone rejected movement (SH8/27); return position " +
+                        $"{BinaryPrimitives.ReadUInt32LittleEndian(packet.Body)}," +
+                        $"{BinaryPrimitives.ReadUInt32LittleEndian(packet.Body.AsSpan(4))}.");
+                }
 
                 if (packet.Header == 2 && packet.Type == 4)
                 {
@@ -2128,6 +2158,7 @@ public sealed class FiestaHeadlessProbeOptions
     public TimeSpan StepTimeout { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan ZoneLoginTimeout { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan HoldDuration { get; init; } = TimeSpan.FromMinutes(5);
+    public FiestaMovementPilotPlan? MovementPilot { get; init; }
     // Diagnostic only: extra FULL client-cycle after four failed Zone logins.
     // Disabled by default. Never changes the Zone pool's PASS criteria.
     public int DelayedZoneReentryAttempts { get; init; }
@@ -2143,6 +2174,7 @@ public sealed class FiestaHeadlessProbeOptions
         if (ClientTag.Length > 8) throw new ArgumentException("ClientTag darf maximal 8 ASCII-Zeichen lang sein.");
         if (StepTimeout <= TimeSpan.Zero || ZoneLoginTimeout <= TimeSpan.Zero) throw new ArgumentException("Timeouts müssen positiv sein.");
         if (HoldDuration < TimeSpan.Zero) throw new ArgumentException("HoldDuration darf nicht negativ sein.");
+        MovementPilot?.Validate(HoldDuration);
         if (DelayedZoneReentryAttempts is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(DelayedZoneReentryAttempts));
         if (RequiredZonePort.HasValue && RequiredZonePort.Value is <= 0 or > 65535)
@@ -2200,6 +2232,7 @@ public sealed class FiestaHeadlessProbeResult
     public ushort RandomId { get; init; }
     public int CharacterCount { get; init; }
     public FiestaZoneActorIdentity? ZoneActor { get; init; }
+    public FiestaMovementPilotCommands? MovementCommands { get; init; }
     public string Detail { get; init; } = string.Empty;
 }
 

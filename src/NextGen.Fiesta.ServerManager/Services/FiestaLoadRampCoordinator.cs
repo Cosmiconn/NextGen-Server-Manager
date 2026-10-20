@@ -798,6 +798,8 @@ public sealed class FiestaLoadRampOptions
 
     public void Validate()
     {
+        if (ClientOptions.MovementPilot is not null)
+            throw new ArgumentException("MovementPilot requires an individual client invocation with its own verified path.");
         if (string.IsNullOrWhiteSpace(TargetZoneExePath) || !File.Exists(TargetZoneExePath))
             throw new FileNotFoundException("TargetZoneExePath wurde nicht gefunden.", TargetZoneExePath);
         if (string.IsNullOrWhiteSpace(CredentialManifestPath) || !File.Exists(CredentialManifestPath))
