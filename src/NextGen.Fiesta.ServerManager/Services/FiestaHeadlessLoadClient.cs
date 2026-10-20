@@ -116,6 +116,7 @@ public sealed class FiestaHeadlessLoadClient
         credential.Validate();
 
         var stage = FiestaLoadClientStage.None;
+        FiestaZoneActorIdentity? zoneActor = null;
         void SetStage(FiestaLoadClientStage next, string detail = "")
         {
             stage = next;
@@ -249,11 +250,13 @@ public sealed class FiestaHeadlessLoadClient
                     // is authoritative and any disconnect remains a hard failure.
                     var zoneAck = await WaitForInitialZoneLoginAckAsync(
                         candidate, options.ZoneLoginTimeout, cancellationToken);
+                    zoneActor = zoneAck.Actor;
                     authenticatedZoneConnection = candidate;
                     candidate = null;
                     SetStage(
                         FiestaLoadClientStage.ZoneAuthenticated,
                         $"NC_MAP_LOGIN_ACK SH6/2 empfangen · Zone-Handoff Versuch {attempt}/{InitialZoneTransferMaxAttempts} " +
+                        $"· ActorHandle={zoneActor.Handle} · LoginXY={zoneActor.LoginX},{zoneActor.LoginY} " +
                         $"· Vor ACK: {zoneAck.ReceivedBeforeAck} Zone-Pakete · {zoneAck.ElapsedMs:N0} ms " +
                         $"· BodyBytes vor ACK: {zoneAck.BodyBytesBeforeAck} · OpcodeMix: {zoneAck.OpcodeMix} " +
                         $"· letzte Opcodes: {zoneAck.RecentOpcodes}");
@@ -406,6 +409,7 @@ public sealed class FiestaHeadlessLoadClient
                 ZonePort = zone.Port,
                 RandomId = randomId,
                 CharacterCount = characterCount,
+                ZoneActor = zoneActor,
                 Detail = $"HEADLESS CLIENT PASS · Login/World/Zone vollständig · Charakter '{credential.CharacterName}' · Zone {zone.Host}:{zone.Port}."
             };
         }
@@ -1584,8 +1588,8 @@ public sealed class FiestaHeadlessLoadClient
                 .Select(pair => $"SH{pair.Key.Header}/{pair.Key.Type}=" +
                     $"{pair.Value.Count}({pair.Value.BodyBytes}B)"));
 
-    private static async Task<(int ReceivedBeforeAck, long ElapsedMs, string RecentOpcodes,
-        long BodyBytesBeforeAck, string OpcodeMix)>
+    internal static async Task<(int ReceivedBeforeAck, long ElapsedMs, string RecentOpcodes,
+        long BodyBytesBeforeAck, string OpcodeMix, FiestaZoneActorIdentity Actor)>
         WaitForInitialZoneLoginAckAsync(
         FiestaWireConnection connection,
         TimeSpan timeout,
@@ -1663,7 +1667,8 @@ public sealed class FiestaHeadlessLoadClient
                     (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
                     precedingOpcodes,
                     bodyBytesBeforeAck,
-                    FormatInitialZoneOpcodeMix(opcodeCounts));
+                    FormatInitialZoneOpcodeMix(opcodeCounts),
+                    FiestaMovementProtocol.ReadLoginIdentity(packet.Body));
         }
 
         throw new TimeoutException($"Zone SH6/2 nach {timeout.TotalSeconds:N0}s nicht empfangen · {Snapshot()}.");
@@ -2194,6 +2199,7 @@ public sealed class FiestaHeadlessProbeResult
     public int ZonePort { get; init; }
     public ushort RandomId { get; init; }
     public int CharacterCount { get; init; }
+    public FiestaZoneActorIdentity? ZoneActor { get; init; }
     public string Detail { get; init; } = string.Empty;
 }
 

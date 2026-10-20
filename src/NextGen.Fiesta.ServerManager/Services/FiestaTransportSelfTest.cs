@@ -10,6 +10,38 @@ public static class FiestaTransportSelfTest
     public static async Task RunAsync()
     {
         FiestaMovementProtocol.RunSelfTest();
+        await WithConnection(async (client, server, token) =>
+        {
+            var waiting = FiestaHeadlessLoadClient.WaitForInitialZoneLoginAckAsync(
+                client, TimeSpan.FromSeconds(2), token);
+            // Server heartbeat before ACK must still be serviced.
+            await server.GetStream().WriteAsync(new byte[] { 2, 4, 8 }, token);
+            var response = await ReadFrame(server.GetStream(), token);
+            new FiestaXorCipher(0).TransformInPlace(response);
+            if (!response.SequenceEqual(new byte[] { 5, 8 }))
+                throw new InvalidDataException("Login identity parsing blocked the pre-ACK heartbeat.");
+            var frame = new byte[245];
+            frame[0] = 244;
+            frame[1] = 2;
+            frame[2] = 24; // SH6/2
+            Convert.FromHexString("E02E").CopyTo(frame, 3);
+            Convert.FromHexString("8E2D0000412A0000").CopyTo(frame, 237);
+            await server.GetStream().WriteAsync(frame, token);
+            var ack = await waiting;
+            if (ack.Actor != new FiestaZoneActorIdentity(12000, 11662, 10817)
+                || ack.ReceivedBeforeAck != 1)
+                throw new InvalidDataException("Zone login did not retain the authenticated actor identity.");
+        });
+        await WithConnection(async (client, server, token) =>
+        {
+            var waiting = FiestaHeadlessLoadClient.WaitForInitialZoneLoginAckAsync(
+                client, TimeSpan.FromSeconds(2), token);
+            await server.GetStream().WriteAsync(new byte[] { 4, 2, 24, 0, 0 }, token);
+            var rejected = false;
+            try { await waiting; }
+            catch (InvalidDataException) { rejected = true; }
+            if (!rejected) throw new InvalidDataException("Truncated SH6/2 authenticated a Zone actor.");
+        });
         await WithConnection(async (world, worldServer, token) =>
         {
             await WithConnection(async (zone, zoneServer, _) =>

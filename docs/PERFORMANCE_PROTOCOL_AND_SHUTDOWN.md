@@ -1,6 +1,6 @@
 # Vorprüfung: aktive Last und Login-Stopp
 
-Stand: 17.10.2026. Offline-Evidenz; noch kein bestandener aktiver Lasttest.
+Stand: 20.10.2026. Offline-Evidenz; noch kein bestandener aktiver Lasttest.
 
 ## Bewegung und Kampf
 
@@ -14,7 +14,11 @@ Der Mitschnitt enthält außerdem Zielwahl `CH9/1` mit zwei Body-Bytes, fünf `C
 
 Noch erforderlich: sichere aktuelle Wege, kleiner Bewegungspilot mit serverseitiger Positionsbestätigung, aktuelle Zielhandles und bestätigte Kampfeffekte, anschließend skalierte aktive Last. Heartbeat-Aktivität und erfolgreich gesendete Pakete allein beweisen weder Bewegung noch Kampf.
 
-Die Bewegungs-/Stopppakete sind inzwischen als reine Encoder implementiert und bytegenau gegen die anonymen Originalfixtures geprüft. Ein Decoder liest die 22-Byte-Bewegungsbroadcasts mit aktuellem Handle, Von-/Nach-Koordinaten und Geschwindigkeit. Ein fremder Mob-Broadcast wird dadurch noch nicht zur Bestätigung eines Testspielers: Die Zuordnung zur aktuellen Sitzung und ein Live-Pilot fehlen weiterhin.
+Die Bewegungs-/Stopppakete sind inzwischen als reine Encoder implementiert und bytegenau gegen die anonymen Originalfixtures geprüft. Ein Decoder liest die 22-Byte-Bewegungsbroadcasts mit aktuellem Handle, Von-/Nach-Koordinaten und Geschwindigkeit. Ein fremder Mob-Broadcast wird dadurch noch nicht zur Bestätigung eines Testspielers.
+
+Die aktuelle Sitzungsidentität ist inzwischen aus `SH6/2` lesbar. Die PDB beschreibt den verwendeten Body als `PROTO_NC_CHAR_MAPLOGIN_ACK` mit 242 Bytes: `charhandle` (UInt16) an Offset 0, 232 Parameterbytes ab Offset 2 und `logincoord` (UInt32 X/Y) an Offset 234/238. Die Disassembly der zugehörigen Füllfunktion bestätigt die Koordinatenoffsets. Der Originalmitschnitt enthält Handle 12000 und Start (11662,10817), exakt den Ausgangspunkt des ersten Bewegungsbefehls. Dieser historische Handle ist ausschließlich ein Testfixture, kein Ziel für neue Sitzungen.
+
+Der Lastclient liest Handle und Startposition aus jeder aktuellen Login-Antwort, protokolliert sie beim Übergang zu `ZoneAuthenticated` und liefert sie im erfolgreichen Probe-Ergebnis als `ZoneActor`. Abweichende Bodygrößen werden verworfen. Loopback-TCP-Tests prüfen die echte Login-Lesefunktion einschließlich vorangehendem Heartbeat und Ablehnung eines verkürzten ACK. Die Parameterregion im Test ist synthetisch mit Nullen gefüllt; übernommen sind nur die belegten Handle-/Koordinatenbytes. Ein Live-Pilot, die Zuordnung empfangener Bewegungen zu diesen Handles und die Bestätigung einer Positionsänderung bleiben offen.
 
 ## Transport für aktive Last
 

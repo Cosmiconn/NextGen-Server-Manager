@@ -8,6 +8,19 @@ namespace NextGen.Fiesta.ServerManager.Services;
 /// </summary>
 public static class FiestaMovementProtocol
 {
+    // NA2016 SH6/2 uses PROTO_NC_CHAR_MAPLOGIN_ACK despite the MAP opcode.
+    // PDB: charhandle@0, param[232]@2, logincoord@234, sizeof=242.
+    // This identifies only the current authenticated Zone session, never a
+    // later reconnect or another player's broadcast with an unrelated handle.
+    public static FiestaZoneActorIdentity ReadLoginIdentity(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 242)
+            throw new InvalidDataException("NA2016 Zone login ACK must contain 242 body bytes.");
+        return new FiestaZoneActorIdentity(BinaryPrimitives.ReadUInt16LittleEndian(body),
+            BinaryPrimitives.ReadUInt32LittleEndian(body[234..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(body[238..]));
+    }
+
     public static byte[] Run(uint fromX, uint fromY, uint toX, uint toY)
     {
         var payload = new byte[18];
@@ -47,6 +60,20 @@ public static class FiestaMovementProtocol
 
     public static void RunSelfTest()
     {
+        // Only the handle/coordinates are captured; unrelated parameter bytes
+        // are synthetic zeros, so no character parameter dump is published.
+        var loginBody = new byte[242];
+        Convert.FromHexString("E02E").CopyTo(loginBody, 0);
+        Convert.FromHexString("8E2D0000412A0000").CopyTo(loginBody, 234);
+        if (ReadLoginIdentity(loginBody) != new FiestaZoneActorIdentity(12000, 11662, 10817))
+            throw new InvalidDataException("Zone actor identity differs from the original-client login capture.");
+        foreach (var length in new[] { 0, 2, 234, 241, 243 })
+        {
+            var rejected = false;
+            try { ReadLoginIdentity(new byte[length]); }
+            catch (InvalidDataException) { rejected = true; }
+            if (!rejected) throw new InvalidDataException("Unexpected Zone login layout was accepted.");
+        }
         // Anonymized original-client capture: 2026-10-07, Zone stream 239.
         if (!Run(11662, 10817, 11710, 10904).SequenceEqual(Convert.FromHexString("19208E2D0000412A0000BE2D0000982A0000"))
             || !Stop(11707, 10896).SequenceEqual(Convert.FromHexString("1220BB2D0000902A0000")))
@@ -60,6 +87,8 @@ public static class FiestaMovementProtocol
         throw new InvalidDataException("Truncated movement broadcast was accepted.");
     }
 }
+
+public sealed record FiestaZoneActorIdentity(ushort Handle, uint LoginX, uint LoginY);
 
 public sealed record FiestaObservedMovement(ushort Handle, uint FromX, uint FromY,
     uint ToX, uint ToY, ushort Speed, bool Running);
