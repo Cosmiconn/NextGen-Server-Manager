@@ -7,7 +7,8 @@ namespace NextGen.Fiesta.ServerManager.Services;
 /// <summary>
 /// Captures a read-only checkpoint of every recursively discovered NA2016 text log and
 /// later analyzes only bytes written after that checkpoint. Small rewrite-style logs are
-/// snapshotted so same-length rewrites can be compared exactly instead of forcing REVIEW.
+/// snapshotted so same-length rewrites and Zone startup snapshots can be compared
+/// exactly instead of treating historical lines as newly appended evidence.
 /// </summary>
 public sealed class ZonePoolRuntimeLogDeltaAudit
 {
@@ -211,9 +212,13 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             }
             if (!existsNow || current is null) continue;
 
-            if (existed && old is not null && current.Length == old.Length && current.LastWriteTimeUtc > old.LastWriteUtc.AddSeconds(1))
+            var zoneStartupSnapshot = Path.GetFileName(path).Equals("Message.txt", StringComparison.OrdinalIgnoreCase)
+                && System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(Path.GetDirectoryName(path)) ?? "", "^Zone0[0-5]$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (existed && old is not null
+                && ((current.Length == old.Length && current.LastWriteTimeUtc > old.LastWriteUtc.AddSeconds(1))
+                    || (zoneStartupSnapshot && current.Length != old.Length)))
             {
-                if (TryAnalyzeSameLengthRewrite(path, old, current, findings, out var inspectedBytes, out var rewriteDetail))
+                if (TryAnalyzeSnapshotRewrite(path, old, current, findings, out var inspectedBytes, out var rewriteDetail))
                 {
                     if (inspectedBytes > 0)
                     {
@@ -400,10 +405,10 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
                (string.IsNullOrWhiteSpace(evidence) ? string.Empty : Environment.NewLine + "  Evidence: " + evidence);
     }
 
-    private bool TryAnalyzeSameLengthRewrite(string path, ZonePoolLogCheckpointEntry old, FileInfo current, List<ZonePoolLogDeltaFinding> findings, out long inspectedBytes, out string detail)
+    private bool TryAnalyzeSnapshotRewrite(string path, ZonePoolLogCheckpointEntry old, FileInfo current, List<ZonePoolLogDeltaFinding> findings, out long inspectedBytes, out string detail)
     {
         inspectedBytes = 0;
-        detail = $"Log änderte sich ohne Längenänderung; exakter Delta-Bereich unbestimmbar: {path}";
+        detail = $"Rewrite-Log besitzt keinen verifizierbaren Snapshot; exakter Delta-Bereich unbestimmbar: {path}";
 
         if (string.IsNullOrWhiteSpace(old.SnapshotBase64) || string.IsNullOrWhiteSpace(old.ContentSha256))
             return false;
@@ -420,7 +425,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             var oldHash = Convert.ToHexString(SHA256.HashData(oldBytes));
             var currentHash = Convert.ToHexString(SHA256.HashData(currentBytes));
 
-            if (!oldHash.Equals(old.ContentSha256, StringComparison.OrdinalIgnoreCase))
+            if (oldBytes.LongLength != old.Length || !oldHash.Equals(old.ContentSha256, StringComparison.OrdinalIgnoreCase))
             {
                 detail = $"Checkpoint-Snapshot-Hash ist inkonsistent: {path}";
                 return false;
@@ -428,15 +433,24 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             if (oldHash.Equals(currentHash, StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            inspectedBytes = currentBytes.LongLength;
             var oldLines = SplitLines(DecodeLogBytes(oldBytes));
             var currentLines = SplitLines(DecodeLogBytes(currentBytes));
+            if (current.Length != old.Length
+                && (!oldLines.Take(2).SequenceEqual(new[] { "-", "ZoneServer::zs_start_old" })
+                    || !currentLines.Take(2).SequenceEqual(new[] { "-", "ZoneServer::zs_start_old" })))
+            {
+                detail = $"Zone-Startsnapshot hat ein unbekanntes Format: {path}";
+                // Preserve visible crash evidence even when the snapshot continuity is unknown.
+                AnalyzeLines(currentLines, path, findings);
+                return false;
+            }
+            inspectedBytes = currentBytes.LongLength;
             AnalyzeLines(GetIntroducedLines(oldLines, currentLines), path, findings);
             return true;
         }
         catch (Exception ex)
         {
-            detail = $"Same-Length-Rewrite konnte nicht bytegenau verglichen werden: {path}: {ex.Message}";
+            detail = $"Rewrite konnte nicht bytegenau verglichen werden: {path}: {ex.Message}";
             return false;
         }
     }
@@ -550,10 +564,11 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
                 throw new InvalidDataException("Falscher Diagnostic-Code wurde fälschlich als Script-Debug freigestellt.");
 
             VerifyFileClassification(scriptDebug, kqBufferAssert, realAssert);
+            VerifyStartupRewrites();
 
             return new ZonePoolLogDeltaAuditSelfTestResult(
                 true,
-                "LOG DELTA CLASSIFICATION SELFTEST: PASS · echte Logdateien/Checkpoints: neue 1669-Disconnects und beide Listener-Fehlerformate blockieren; historische Einträge, erfolgreiche Listener und andere Disconnect-Gründe nicht; gemischte Debug/KQ/echte Assertions bleiben getrennt erkennbar.");
+                "LOG DELTA CLASSIFICATION SELFTEST: PASS · echte Logdateien/Checkpoints: neue 1669-Disconnects und Listener-Fehler blockieren; variable Zone-Startsnapshots werden vollständig verglichen; neue Fehler und zusätzliche Warnungen bleiben sichtbar, gewöhnliche Logkürzungen bleiben REVIEW; gemischte Debug/KQ/echte Assertions bleiben getrennt erkennbar.");
         }
         catch (Exception ex)
         {
@@ -638,6 +653,52 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
         {
             Directory.Delete(tempRoot, recursive: true);
         }
+    }
+
+    private static void VerifyStartupRewrites()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "NextGenStartupRewrite-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(tempRoot, "server");
+        var zone = Path.Combine(root, "Zone00");
+        Directory.CreateDirectory(zone);
+        const string header = "-\r\nZoneServer::zs_start_old\r\n";
+        const string baseline = "SHN - ViewData Checksum - AbStateView.shn\r\n";
+        const string retry = "Try to connect[127.0.0.1:9014]5\r\n";
+        try
+        {
+            var audit = new ZonePoolRuntimeLogDeltaAudit();
+            var message = Path.Combine(zone, "Message.txt");
+            foreach (var retries in new[] { 1, 3 })
+            {
+                File.WriteAllText(message, header + baseline + string.Concat(Enumerable.Repeat(retry, 2)));
+                var checkpoint = Path.Combine(tempRoot, Guid.NewGuid() + ".json");
+                if (!audit.SaveCheckpoint(root, checkpoint).Success) throw new InvalidDataException("Startup checkpoint failed.");
+                File.WriteAllText(message, header + baseline + string.Concat(Enumerable.Repeat(retry, retries)));
+                var result = audit.Audit(root, checkpoint);
+                if (!result.Clean || !result.EvidenceComplete || result.RewrittenFileCount != 1)
+                    throw new InvalidDataException("Variable-length startup snapshot was treated as lost log evidence.");
+                // A new fault before the old byte offset must not be skipped when the file grows.
+                File.WriteAllText(message, header + "access violation\r\n" + baseline + string.Concat(Enumerable.Repeat(retry, retries)));
+                if (!audit.Audit(root, checkpoint).Blocked)
+                    throw new InvalidDataException("Rewritten startup fault was missed before the old byte offset.");
+                File.WriteAllText(message, header + baseline + baseline + string.Concat(Enumerable.Repeat(retry, retries)));
+                if (!audit.Audit(root, checkpoint).ReviewRequired)
+                    throw new InvalidDataException("Additional occurrence of an existing warning was hidden.");
+                File.WriteAllText(message, "unknown startup format\r\naccess violation\r\n");
+                var unknown = audit.Audit(root, checkpoint);
+                if (!unknown.Blocked || unknown.EvidenceComplete)
+                    throw new InvalidDataException("Unknown startup format hid crash evidence or bypassed the continuity guard.");
+            }
+            var appendLog = Path.Combine(zone, "DebugMessage.txt");
+            File.WriteAllText(appendLog, header + baseline + retry + retry);
+            var ordinaryCheckpoint = Path.Combine(tempRoot, "ordinary.json");
+            if (!audit.SaveCheckpoint(root, ordinaryCheckpoint).Success) throw new InvalidDataException("Ordinary checkpoint failed.");
+            File.WriteAllText(appendLog, header + baseline);
+            var truncated = audit.Audit(root, ordinaryCheckpoint);
+            if (!truncated.ReviewRequired || truncated.EvidenceComplete)
+                throw new InvalidDataException("Ordinary log truncation lost its evidence-gap guard.");
+        }
+        finally { Directory.Delete(tempRoot, recursive: true); }
     }
 
     private static IReadOnlyList<string> GetIntroducedLines(IReadOnlyList<string> oldLines, IReadOnlyList<string> currentLines)

@@ -10,6 +10,7 @@ public static class FiestaTransportSelfTest
     public static async Task RunAsync()
     {
         FiestaMovementProtocol.RunSelfTest();
+        FiestaCombatProtocol.RunSelfTest();
         await RunMovementPilotTestsAsync();
         await WithConnection(async (client, server, token) =>
         {

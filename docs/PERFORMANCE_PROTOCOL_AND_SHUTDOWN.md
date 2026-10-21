@@ -1,6 +1,6 @@
 # Vorprüfung: aktive Last und Login-Stopp
 
-Stand: 20.10.2026. Offline-Evidenz; noch kein bestandener aktiver Lasttest.
+Stand: 21.10.2026. Protokollvorprüfung; noch kein bestandener aktiver Lasttest.
 
 ## Bewegung und Kampf
 
@@ -11,6 +11,10 @@ Die Zone-PDB bestätigt `NC_ACT=8`, `NC_ACT_MOVERUN_CMD=25` und `PROTO_NC_ACT_MO
 Ein anonymes Paketfixture aus dem Mitschnitt, einschließlich des zweiby­tigen Opcodes, lautet `19208e2d0000412a0000be2d0000982a0000`: von (11662,10817) nach (11710,10904). Das Stoppfixture `1220bb2d0000902a0000` enthält (11707,10896). Diese historischen Koordinaten sind keine Wegfreigabe für die aktuellen Testcharaktere.
 
 Der Mitschnitt enthält außerdem Zielwahl `CH9/1` mit zwei Body-Bytes, fünf `CH9/43`-Bash-Starts ohne Body, einen `CH9/50`-Bash-Stopp ohne Body und zwei `CH9/64`-Skillbefehle mit vier Body-Bytes. Die PDB benennt diese Kommandos entsprechend. Ein Lastgenerator darf daraus keine alten Zielhandles oder Skills blind übernehmen: Zielauswahl und Schaden müssen gegen die aktuelle Serversitzung verifiziert werden.
+
+Die Zielantwort `SH9/2` ist inzwischen gegen Originalmitschnitt und PDB geprüft: 30 Body-Bytes, `order` an Offset 0, Zielhandle als UInt16 an Offset 1, HP/MaxHP als UInt32 an Offset 3/7, SP/MaxSP an 11/15, LP/MaxLP an 19/23, Level an 27 und HP-Änderungsfolge an 28. Das Beispiel bestätigt Ziel 9062 mit 1000/1000 HP. Diese historische Kennung wird ausschließlich im Codec-Test verwendet. Der Mitschnitt enthält keinen `SH9/44`-Treffer; die gesendeten Angriffe gelten ausdrücklich nicht als bestätigter Kampf.
+
+`FiestaCombatProtocol` stellt Encoder für Zielwahl und Basisangriff/Angriffsstopp sowie den Zielantwortdecoder bereit. Der zusätzliche `SH9/44`-Decoder basiert bisher nur auf `PROTO_NC_BAT_BASH_HIT_CMD` in der PDB: 13 Bytes, Zielhandle an 0, gepackter Schaden an 2 (Bit 0 kritisch, obere 15 Bits Schaden), Flags an 4, Rest-HP an 5, Angriffsgeschwindigkeit an 9 und HP-Änderungsfolge an 11. Sein Testfixture ist ausdrücklich synthetisch. Tests prüfen außerdem Byteordnung, Bitgrenzen, fremde Opcodes und falsche Paketgrößen. Es gibt noch keinen aktiven Kampftreiber oder einen Live-Schadensnachweis; vor dessen Freigabe fehlen die aktuelle Zielbindung und die Zuordnung bestätigter Treffer zur laufenden Sitzung.
 
 Noch erforderlich: sichere aktuelle Wege, kleiner Bewegungspilot mit serverseitiger Positionsbestätigung, aktuelle Zielhandles und bestätigte Kampfeffekte, anschließend skalierte aktive Last. Heartbeat-Aktivität und erfolgreich gesendete Pakete allein beweisen weder Bewegung noch Kampf.
 
@@ -55,6 +59,6 @@ Das erweiterte Profil erhält alle 26 bisherigen Laststufen und ergänzt 1700, 1
 
 `LoadProcessSampler` erfasst PID-/Startzeit-gebunden Prozess-CPU, den stärksten beobachteten Thread, Private Bytes, Working Set, virtuellen Speicher, Handles und Threads. Prozess-CPU wird in Prozent eines logischen Kerns angegeben und kann größer als 100 sein. Beendete Threads sind nicht nachträglich messbar. Fehlende Messungen bleiben als Lücken/Fehler sichtbar. Ressourcen-P95/P99 sind keine Gameplay-Latenzen.
 
-Release-Build und lokale Protokoll-, Zeitbudget-, Heartbeat- und Ressourcen-Selbsttests bestanden. Die 400 zusätzlichen Zugangssätze wurden lokal vorbereitet; Accounts und Charaktere wurden noch nicht angelegt. Neue Account- und Charakterdatenbanksicherungen wurden mit CHECKSUM erstellt und per RESTORE VERIFYONLY geprüft. Der erhöhte Start wurde von Windows vor Prozessstart abgebrochen; der Nutzer sah keinen UAC-Dialog. Alle Fiesta-Dienste blieben gestoppt. Der Live-Nachweis steht aus.
+Release-Build und lokale Protokoll-, Zeitbudget-, Heartbeat- und Ressourcen-Selbsttests bestanden. Am 21.10. wurden nach frischen CHECKSUM-Sicherungen und RESTORE VERIFYONLY alle 400 zusätzlichen Accounts/Charaktere über das Originalprotokoll verifiziert. Der anschließende reguläre Dienststopp gelang einschließlich Login. Der geplante Lastlauf blieb wegen eines offenen Startlog-Audits aus; dessen Behandlung unterschiedlich langer Zone-Startsnapshots ist inzwischen korrigiert und getestet. Ein späterer erhöhter Kapazitätsstart wurde von Windows vor Prozessstart abgebrochen; der Nutzer sah keinen UAC-Dialog. Alle Fiesta-Dienste sind gestoppt. 2000er-Last, aktive Spielbelastung und Wiederholungsprüfung des zuvor beobachteten Login-Hängers stehen weiterhin aus.
 
 Siehe [vollständige Abschlusskriterien](PERFORMANCE_COMPLETION_PLAN.md). Private Mitschnitte, Symboldumps, Datenbanksicherungen und Zugangsdaten bleiben lokal.
