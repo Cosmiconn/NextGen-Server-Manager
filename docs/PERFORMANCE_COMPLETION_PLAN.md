@@ -1,8 +1,12 @@
 # Abschlussprüfung Serverleistung
 
-Stand: 20.10.2026. Ziel aktiv; noch nicht abgeschlossen.
+Stand: 21.10.2026. Noch nicht abgeschlossen.
 
 Die beiden verteilten 1600er-Tests bleiben die Vergleichsbasis. Sie ersetzen weder einen 2000er-Test noch aktive Spielbelastung. Originalnachweise bleiben unverändert.
+
+Der erhöhte Teststart funktioniert wieder. Der erste Versuch am 21.10. scheiterte vor der Kontoerstellung, weil ein ASUS-Socketprozess die Ports 9012 und 9013 belegte. Nach ausdrücklicher Freigabe wurde genau dieser Prozess vorübergehend beendet; der erneute Vorbereitungslauf ist gestartet. Der Prozess muss nach den Tests wieder gestartet werden.
+
+Der Logaudit blockiert nun beide tatsächlich beobachteten `FAILED Listen_Add`-/`FAILED LISTEN ADD`-Formate als `NG-NET-0006`. Die Regression prüft neue Fehler, historische Einträge und erfolgreiche Listener getrennt. Eine separate erneute Auswertung des fehlgeschlagenen Starts erkannte beide Portfehler; die ursprünglichen Nachweise wurden nicht überschrieben. Daraus folgt noch kein erfolgreicher Lasttest.
 
 | Anforderung | Abnahmebeleg | Aktueller Stand |
 | --- | --- | --- |

@@ -20,6 +20,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
         "NG-CORE-0002",
         "NG-CORE-0003",
         "NG-PROTO-0003",
+        "NG-NET-0006",
         "NG-ZONE-0014",
         "NG-ZONE-0015",
         "NG-ZONE-0020",
@@ -552,7 +553,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
 
             return new ZonePoolLogDeltaAuditSelfTestResult(
                 true,
-                "LOG DELTA CLASSIFICATION SELFTEST: PASS · echte Logdateien/Checkpoints: neue 1669-Disconnects blockieren, historische Einträge und andere Disconnect-Gründe nicht; gemischte Debug/KQ/echte Assertions bleiben getrennt erkennbar.");
+                "LOG DELTA CLASSIFICATION SELFTEST: PASS · echte Logdateien/Checkpoints: neue 1669-Disconnects und beide Listener-Fehlerformate blockieren; historische Einträge, erfolgreiche Listener und andere Disconnect-Gründe nicht; gemischte Debug/KQ/echte Assertions bleiben getrennt erkennbar.");
         }
         catch (Exception ex)
         {
@@ -608,6 +609,30 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
                 || !mixedResult.Findings.Any(f => f.Code == "NG-KQ-MAKE-BUFFER" && !f.Blocking)
                 || !mixedResult.Findings.Any(f => f.Code == "NG-SCRIPT-DEBUG" && !f.Blocking))
                 throw new InvalidDataException("Debug-Assertion verdeckt nachfolgende KQ-/echte Assertion in derselben Datei.");
+
+            var wmLogs = Path.Combine(serverRoot, "WorldManager", "DebugMessage");
+            Directory.CreateDirectory(wmLogs);
+            var listenerLog = Path.Combine(wmLogs, "Msg_2026-10-21.txt");
+            foreach (var failure in new[]
+            {
+                "000034 2026-10-21 10:25:38 *FAILED Listen_Add - IP = 127.0.0.1:9012",
+                "000089 2026-10-21 10:27:35 *FAILED LISTEN ADD, IP=127.0.0.1:9013, From=SERVER_ID_CLIENT*"
+            })
+            {
+                File.AppendAllText(listenerLog, failure + "\r\n");
+                var listenerCheckpoint = Path.Combine(tempRoot, Guid.NewGuid() + ".json");
+                if (!audit.SaveCheckpoint(serverRoot, listenerCheckpoint).Success)
+                    throw new InvalidDataException("Listener log checkpoint failed.");
+                File.AppendAllText(listenerLog,
+                    "000087 2026-10-21 10:27:34 <SUCCESSED LISTEN ADD, IP=127.0.0.1:9014, From=SERVER_ID_ZONE>\r\n");
+                if (!audit.Audit(serverRoot, listenerCheckpoint).Clean)
+                    throw new InvalidDataException("Historical listener error or successful listener blocked a fresh audit.");
+                File.AppendAllText(listenerLog, failure + "\r\n");
+                var listenerResult = audit.Audit(serverRoot, listenerCheckpoint);
+                if (!listenerResult.Blocked || listenerResult.Clean
+                    || !listenerResult.Findings.Any(f => f.Code == "NG-NET-0006" && f.Blocking && f.Evidence == failure))
+                    throw new InvalidDataException("Live listener bind failure was incorrectly classified CLEAN.");
+            }
         }
         finally
         {

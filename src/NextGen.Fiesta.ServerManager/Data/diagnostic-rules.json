@@ -1,5 +1,15 @@
 [
   {
+    "code": "NG-NET-0006",
+    "severity": "Error",
+    "pattern": "\\bFAILED\\s+LISTEN(?:_|\\s+)ADD\\b",
+    "regex": true,
+    "title": "Server-Listener konnte nicht starten",
+    "description": "Der Dienst konnte eine konfigurierte Listen-Adresse nicht binden und ist auf diesem Port nicht verfügbar.",
+    "recommendation": "Adresse und Portbesitzer prüfen. Ein Portkonflikt kann den Dienst zum Selbststopp veranlassen; erst nach Klärung erneut starten.",
+    "repairAction": "None"
+  },
+  {
     "code": "NG-PROTO-0002",
     "severity": "Warning",
     "pattern": "FAILED - ZONE Parser's unknown",
