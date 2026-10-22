@@ -45,9 +45,9 @@ internal sealed class FiestaMobVisibilitySession : IDisposable
                     visible[mob.Handle] = new FiestaMobTargetBinding(mob);
                 }
             if (removed is not null) visible.Remove(removed.Value);
-            // The appearance coordinates no longer describe a stationary target.
-            // A later fresh appearance can make it a candidate again; do not
-            // infer arrival/range from a movement command's destination.
+            // An observed walk/run invalidates the last appearance coordinates.
+            // A later appearance can make it a candidate again, but neither
+            // packet proves that it is stationary or currently within range.
             if (movement is not null) visible.Remove(movement.Handle);
         }
     }
@@ -63,6 +63,16 @@ internal sealed class FiestaMobVisibilitySession : IDisposable
         lock (gate)
             return !closed && visible.TryGetValue(binding.Mob.Handle, out var current)
                 && ReferenceEquals(current, binding);
+    }
+
+    internal FiestaMobVisibilityObservation Snapshot()
+    {
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(closed, this);
+            return new FiestaMobVisibilityObservation(Actor, DateTimeOffset.UtcNow,
+                visible.Values.Select(x => x.Mob).OrderBy(x => x.Handle).ToArray());
+        }
     }
 
     public void Dispose()
@@ -130,3 +140,7 @@ internal sealed class FiestaMobTargetBinding
     internal FiestaMobTargetBinding(FiestaVisibleMob mob) => Mob = mob;
     internal FiestaVisibleMob Mob { get; }
 }
+
+/// <summary>Historical observation at hold end, not a reusable targeting capability.</summary>
+public sealed record FiestaMobVisibilityObservation(FiestaZoneActorIdentity Actor,
+    DateTimeOffset ObservedUtc, IReadOnlyList<FiestaVisibleMob> AppearanceCandidates);

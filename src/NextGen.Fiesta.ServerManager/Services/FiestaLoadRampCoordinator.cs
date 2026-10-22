@@ -800,6 +800,8 @@ public sealed class FiestaLoadRampOptions
     {
         if (ClientOptions.MovementPilot is not null)
             throw new ArgumentException("MovementPilot requires an individual client invocation with its own verified path.");
+        if (ClientOptions.ObserveMobVisibility)
+            throw new ArgumentException("Mob visibility observation requires an individual pilot invocation.");
         if (string.IsNullOrWhiteSpace(TargetZoneExePath) || !File.Exists(TargetZoneExePath))
             throw new FileNotFoundException("TargetZoneExePath wurde nicht gefunden.", TargetZoneExePath);
         if (string.IsNullOrWhiteSpace(CredentialManifestPath) || !File.Exists(CredentialManifestPath))

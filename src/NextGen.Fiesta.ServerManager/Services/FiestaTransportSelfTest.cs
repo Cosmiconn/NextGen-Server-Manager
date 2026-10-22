@@ -13,6 +13,7 @@ public static class FiestaTransportSelfTest
         FiestaCombatProtocol.RunSelfTest();
         FiestaMobVisibilityProtocol.RunSelfTest();
         FiestaMobVisibilitySession.RunSelfTest();
+        await RunMobVisibilityTestsAsync();
         await RunMovementPilotTestsAsync();
         await WithConnection(async (client, server, token) =>
         {
@@ -178,6 +179,59 @@ public static class FiestaTransportSelfTest
             var packet = await read;
             if (packet.Header != 2 || packet.Type != 4 || !packet.Body.SequenceEqual(new byte[] { 12, 34 }))
                 throw new InvalidDataException("Valid fragmented frame was not reassembled.");
+        });
+    }
+
+    private static async Task RunMobVisibilityTestsAsync()
+    {
+        await WithConnection(async (world, worldServer, token) =>
+        {
+            await WithConnection(async (zone, zoneServer, _) =>
+            {
+                using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                var actor = new FiestaZoneActorIdentity(12000, 11662, 10817);
+                using var visibility = new FiestaMobVisibilitySession(actor);
+                var hold = FiestaHeadlessLoadClient.HoldSessionsAsync(world, zone,
+                    TimeSpan.FromSeconds(8), null, cancellation.Token, zoneActor: actor, mobVisibility: visibility);
+                var zoneCipher = new FiestaXorCipher(0);
+                var worldCipher = new FiestaXorCipher(0);
+                async Task Barrier(TcpClient server, FiestaXorCipher cipher)
+                {
+                    await server.GetStream().WriteAsync(new byte[] { 2, 4, 8 }, token);
+                    var reply = await ReadFrame(server.GetStream(), token);
+                    cipher.TransformInPlace(reply);
+                    if (!reply.SequenceEqual(new byte[] { 5, 8 }))
+                        throw new InvalidDataException("Passive visibility interfered with heartbeat order.");
+                }
+
+                var appearance = new byte[152];
+                appearance[0] = 151;
+                appearance[1] = 8;
+                appearance[2] = 28; // SH7/8
+                Convert.FromHexString("6623021240143000000A28000028").CopyTo(appearance, 3);
+                await worldServer.GetStream().WriteAsync(appearance, token);
+                await Barrier(worldServer, worldCipher);
+                if (visibility.Bind(9062) is not null)
+                    throw new InvalidDataException("World packet contaminated Zone mob visibility.");
+                await zoneServer.GetStream().WriteAsync(appearance, token);
+                await Barrier(zoneServer, zoneCipher);
+                var binding = visibility.Bind(9062)
+                    ?? throw new InvalidDataException("Zone receive pump did not observe the current mob.");
+                if (visibility.Snapshot().AppearanceCandidates.Count != 1)
+                    throw new InvalidDataException("Passive observation lost the current candidate.");
+                await zoneServer.GetStream().WriteAsync(new byte[] { 4, 14, 28, 0x66, 0x23 }, token);
+                await Barrier(zoneServer, zoneCipher);
+                if (visibility.IsCurrent(binding) || visibility.Snapshot().AppearanceCandidates.Count != 0)
+                    throw new InvalidDataException("Zone receive pump retained a removed target.");
+                // A malformed list must fail the hold promptly even while World
+                // remains connected, rather than returning a usable observation.
+                await zoneServer.GetStream().WriteAsync(new byte[] { 3, 9, 28, 1 }, token);
+                var rejected = false;
+                try { await hold.WaitAsync(TimeSpan.FromSeconds(2), token); }
+                catch (InvalidDataException) { rejected = true; }
+                if (!rejected || visibility.IsCurrent(binding))
+                    throw new InvalidDataException("Malformed Zone visibility did not invalidate the hold.");
+            });
         });
     }
 

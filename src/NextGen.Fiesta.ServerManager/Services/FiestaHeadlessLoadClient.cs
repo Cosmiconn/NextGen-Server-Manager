@@ -373,6 +373,11 @@ public sealed class FiestaHeadlessLoadClient
                 ?? throw new InvalidOperationException(
                     $"Zone-Handoff erreichte SH6/2 nach {InitialZoneTransferMaxAttempts} Versuch(en) nicht.");
 
+            using var mobVisibility = options.ObserveMobVisibility
+                ? new FiestaMobVisibilitySession(zoneActor
+                    ?? throw new InvalidDataException("Mob observation requires an authenticated Zone actor."))
+                : null;
+
             await zoneConnection.SendPacketAsync(
                 6,
                 3,
@@ -397,7 +402,7 @@ public sealed class FiestaHeadlessLoadClient
                         FiestaLoadClientStage.Holding,
                         heartbeatDetail,
                         DateTimeOffset.UtcNow)),
-                    cancellationToken, options.MovementPilot, zoneActor);
+                    cancellationToken, options.MovementPilot, zoneActor, mobVisibility);
             }
 
             SetStage(FiestaLoadClientStage.Completed);
@@ -413,6 +418,7 @@ public sealed class FiestaHeadlessLoadClient
                 CharacterCount = characterCount,
                 ZoneActor = zoneActor,
                 MovementCommands = movementCommands,
+                MobVisibilityAtHoldEnd = mobVisibility?.Snapshot(),
                 Detail = $"HEADLESS CLIENT PASS · Login/World/Zone vollständig · Charakter '{credential.CharacterName}' · Zone {zone.Host}:{zone.Port}."
             };
         }
@@ -1392,10 +1398,13 @@ public sealed class FiestaHeadlessLoadClient
         Action<string>? zoneHeartbeatProgress,
         CancellationToken cancellationToken,
         FiestaMovementPilotPlan? movementPilot = null,
-        FiestaZoneActorIdentity? zoneActor = null)
+        FiestaZoneActorIdentity? zoneActor = null,
+        FiestaMobVisibilitySession? mobVisibility = null)
     {
         movementPilot?.Validate(duration);
         movementPilot?.VerifyActor(zoneActor);
+        if (mobVisibility is not null && mobVisibility.Actor != zoneActor)
+            throw new InvalidOperationException("Mob visibility belongs to a different authenticated Zone actor.");
         if (duration <= TimeSpan.Zero)
             return null;
 
@@ -1414,7 +1423,8 @@ public sealed class FiestaHeadlessLoadClient
             allowRemoteClose: false,
             zoneHeartbeatProgress,
             holdCts.Token,
-            rejectMovementFailure: movementPilot is not null);
+            rejectMovementFailure: movementPilot is not null,
+            mobVisibility: mobVisibility);
 
         async Task CancelSiblingOnFailure(Task pump)
         {
@@ -1457,7 +1467,8 @@ public sealed class FiestaHeadlessLoadClient
         bool allowRemoteClose,
         Action<string>? heartbeatProgress,
         CancellationToken cancellationToken,
-        bool rejectMovementFailure = false)
+        bool rejectMovementFailure = false,
+        FiestaMobVisibilitySession? mobVisibility = null)
     {
         var serverHeartbeatRequests = 0;
         DateTimeOffset? lastServerHeartbeatUtc = null;
@@ -1505,6 +1516,8 @@ public sealed class FiestaHeadlessLoadClient
                 var packet = await connection.ReadPacketAsync(
                     TimeSpan.FromSeconds(45),
                     cancellationToken);
+
+                mobVisibility?.Observe(packet.Header, packet.Type, packet.Body);
 
                 if (rejectMovementFailure && packet.Header == 8 && packet.Type == 27)
                 {
@@ -2159,6 +2172,9 @@ public sealed class FiestaHeadlessProbeOptions
     public TimeSpan ZoneLoginTimeout { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan HoldDuration { get; init; } = TimeSpan.FromMinutes(5);
     public FiestaMovementPilotPlan? MovementPilot { get; init; }
+    // Passive pilot only. Collects appearances after authentication; does not
+    // select targets, send attacks, or change the normal idle ramp by default.
+    public bool ObserveMobVisibility { get; init; }
     // Diagnostic only: extra FULL client-cycle after four failed Zone logins.
     // Disabled by default. Never changes the Zone pool's PASS criteria.
     public int DelayedZoneReentryAttempts { get; init; }
@@ -2175,6 +2191,8 @@ public sealed class FiestaHeadlessProbeOptions
         if (StepTimeout <= TimeSpan.Zero || ZoneLoginTimeout <= TimeSpan.Zero) throw new ArgumentException("Timeouts müssen positiv sein.");
         if (HoldDuration < TimeSpan.Zero) throw new ArgumentException("HoldDuration darf nicht negativ sein.");
         MovementPilot?.Validate(HoldDuration);
+        if (ObserveMobVisibility && HoldDuration <= TimeSpan.Zero)
+            throw new ArgumentException("Mob visibility observation requires a positive hold duration.");
         if (DelayedZoneReentryAttempts is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(DelayedZoneReentryAttempts));
         if (RequiredZonePort.HasValue && RequiredZonePort.Value is <= 0 or > 65535)
@@ -2233,6 +2251,7 @@ public sealed class FiestaHeadlessProbeResult
     public int CharacterCount { get; init; }
     public FiestaZoneActorIdentity? ZoneActor { get; init; }
     public FiestaMovementPilotCommands? MovementCommands { get; init; }
+    public FiestaMobVisibilityObservation? MobVisibilityAtHoldEnd { get; init; }
     public string Detail { get; init; } = string.Empty;
 }
 
