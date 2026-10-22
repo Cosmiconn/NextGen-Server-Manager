@@ -1,5 +1,15 @@
 [
   {
+    "code": "NG-NET-0006",
+    "severity": "Error",
+    "pattern": "\\bFAILED\\s+LISTEN(?:_|\\s+)ADD\\b",
+    "regex": true,
+    "title": "Server-Listener konnte nicht starten",
+    "description": "Der Dienst konnte eine konfigurierte Listen-Adresse nicht binden und ist auf diesem Port nicht verfügbar.",
+    "recommendation": "Adresse und Portbesitzer prüfen. Ein Portkonflikt kann den Dienst zum Selbststopp veranlassen; erst nach Klärung erneut starten.",
+    "repairAction": "None"
+  },
+  {
     "code": "NG-PROTO-0002",
     "severity": "Warning",
     "pattern": "FAILED - ZONE Parser's unknown",
@@ -187,6 +197,16 @@
     "title": "MapCluster-Limit erreicht",
     "description": "Der MapCluster-Container der Zone ist ausgeschöpft.",
     "recommendation": "Mapzuordnung auf zusätzliche ZoneServer verteilen. Verifiziertes Registry-Limit: 512.",
+    "repairAction": "None"
+  },
+  {
+    "code": "NG-ZONE-0023",
+    "severity": "Error",
+    "pattern": "\\bso_Disconnect(?:\\s+\\S+\\s+1669\\b|\\s*\\[1669\\])",
+    "regex": true,
+    "title": "Zone-Disconnect 1669",
+    "description": "Die Zone hat einen Client mit Disconnect-Grund 1669 getrennt. Beim untersuchten NA2016-Binary gehört dieser Fehler zum ShadowStep/fm_Marking-Pfad; der Logeintrag allein belegt weder den auslösenden Akteur noch die tatsächlichen Koordinaten.",
+    "recommendation": "Mit Login-/Handoff-Trace und CoordRepairLog zeitlich korrelieren. Für die Ursachenanalyse Rückgabewert, Objektkoordinaten, Mapgrenzen und Aufrufstack in einem getrennten Diagnoselauf erfassen. Ein erfolgreicher Retry beseitigt diesen Befund nicht.",
     "repairAction": "None"
   },
   {

@@ -7,7 +7,8 @@ namespace NextGen.Fiesta.ServerManager.Services;
 /// <summary>
 /// Captures a read-only checkpoint of every recursively discovered NA2016 text log and
 /// later analyzes only bytes written after that checkpoint. Small rewrite-style logs are
-/// snapshotted so same-length rewrites can be compared exactly instead of forcing REVIEW.
+/// snapshotted so same-length rewrites and Zone startup snapshots can be compared
+/// exactly instead of treating historical lines as newly appended evidence.
 /// </summary>
 public sealed class ZonePoolRuntimeLogDeltaAudit
 {
@@ -20,11 +21,13 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
         "NG-CORE-0002",
         "NG-CORE-0003",
         "NG-PROTO-0003",
+        "NG-NET-0006",
         "NG-ZONE-0014",
         "NG-ZONE-0015",
         "NG-ZONE-0020",
         "NG-ZONE-0021",
-        "NG-ZONE-0022"
+        "NG-ZONE-0022",
+        "NG-ZONE-0023"
     };
 
     private static readonly string[] BlockingRawPatterns =
@@ -209,9 +212,13 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             }
             if (!existsNow || current is null) continue;
 
-            if (existed && old is not null && current.Length == old.Length && current.LastWriteTimeUtc > old.LastWriteUtc.AddSeconds(1))
+            var zoneStartupSnapshot = Path.GetFileName(path).Equals("Message.txt", StringComparison.OrdinalIgnoreCase)
+                && System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(Path.GetDirectoryName(path)) ?? "", "^Zone0[0-5]$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (existed && old is not null
+                && ((current.Length == old.Length && current.LastWriteTimeUtc > old.LastWriteUtc.AddSeconds(1))
+                    || (zoneStartupSnapshot && current.Length != old.Length)))
             {
-                if (TryAnalyzeSameLengthRewrite(path, old, current, findings, out var inspectedBytes, out var rewriteDetail))
+                if (TryAnalyzeSnapshotRewrite(path, old, current, findings, out var inspectedBytes, out var rewriteDetail))
                 {
                     if (inspectedBytes > 0)
                     {
@@ -398,10 +405,10 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
                (string.IsNullOrWhiteSpace(evidence) ? string.Empty : Environment.NewLine + "  Evidence: " + evidence);
     }
 
-    private bool TryAnalyzeSameLengthRewrite(string path, ZonePoolLogCheckpointEntry old, FileInfo current, List<ZonePoolLogDeltaFinding> findings, out long inspectedBytes, out string detail)
+    private bool TryAnalyzeSnapshotRewrite(string path, ZonePoolLogCheckpointEntry old, FileInfo current, List<ZonePoolLogDeltaFinding> findings, out long inspectedBytes, out string detail)
     {
         inspectedBytes = 0;
-        detail = $"Log änderte sich ohne Längenänderung; exakter Delta-Bereich unbestimmbar: {path}";
+        detail = $"Rewrite-Log besitzt keinen verifizierbaren Snapshot; exakter Delta-Bereich unbestimmbar: {path}";
 
         if (string.IsNullOrWhiteSpace(old.SnapshotBase64) || string.IsNullOrWhiteSpace(old.ContentSha256))
             return false;
@@ -418,7 +425,7 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             var oldHash = Convert.ToHexString(SHA256.HashData(oldBytes));
             var currentHash = Convert.ToHexString(SHA256.HashData(currentBytes));
 
-            if (!oldHash.Equals(old.ContentSha256, StringComparison.OrdinalIgnoreCase))
+            if (oldBytes.LongLength != old.Length || !oldHash.Equals(old.ContentSha256, StringComparison.OrdinalIgnoreCase))
             {
                 detail = $"Checkpoint-Snapshot-Hash ist inkonsistent: {path}";
                 return false;
@@ -426,15 +433,24 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             if (oldHash.Equals(currentHash, StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            inspectedBytes = currentBytes.LongLength;
             var oldLines = SplitLines(DecodeLogBytes(oldBytes));
             var currentLines = SplitLines(DecodeLogBytes(currentBytes));
+            if (current.Length != old.Length
+                && (!oldLines.Take(2).SequenceEqual(new[] { "-", "ZoneServer::zs_start_old" })
+                    || !currentLines.Take(2).SequenceEqual(new[] { "-", "ZoneServer::zs_start_old" })))
+            {
+                detail = $"Zone-Startsnapshot hat ein unbekanntes Format: {path}";
+                // Preserve visible crash evidence even when the snapshot continuity is unknown.
+                AnalyzeLines(currentLines, path, findings);
+                return false;
+            }
+            inspectedBytes = currentBytes.LongLength;
             AnalyzeLines(GetIntroducedLines(oldLines, currentLines), path, findings);
             return true;
         }
         catch (Exception ex)
         {
-            detail = $"Same-Length-Rewrite konnte nicht bytegenau verglichen werden: {path}: {ex.Message}";
+            detail = $"Rewrite konnte nicht bytegenau verglichen werden: {path}: {ex.Message}";
             return false;
         }
     }
@@ -443,7 +459,13 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
     {
         if (lines.Count == 0) return;
 
-        foreach (var issue in _analyzer.Analyze(lines, path))
+        // Analyze exception classes separately: LogAnalyzer keeps only the first
+        // occurrence of each rule. A debug assertion must not hide a later real
+        // assertion (or a KQ warning) with the same NG-CORE-0002 rule code.
+        var classifiedLines = lines.GroupBy(line =>
+            IsKnownTsDebugLuaAssertion("NG-CORE-0002", line) ? 1 :
+            IsKnownKqMakeBufferAssertion("NG-CORE-0002", line) ? 2 : 0);
+        foreach (var issue in classifiedLines.SelectMany(group => _analyzer.Analyze(group, path)))
         {
             var isKnownScriptDebugAssertion = IsKnownTsDebugLuaAssertion(issue.Code, issue.Evidence);
             var isKnownKqMakeBufferAssertion = IsKnownKqMakeBufferAssertion(issue.Code, issue.Evidence);
@@ -541,9 +563,12 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
             if (IsKnownTsDebugLuaAssertion("NG-CORE-0001", scriptDebug))
                 throw new InvalidDataException("Falscher Diagnostic-Code wurde fälschlich als Script-Debug freigestellt.");
 
+            VerifyFileClassification(scriptDebug, kqBufferAssert, realAssert);
+            VerifyStartupRewrites();
+
             return new ZonePoolLogDeltaAuditSelfTestResult(
                 true,
-                "LOG DELTA CLASSIFICATION SELFTEST: PASS · [TS-Debug *.lua] Assertions sind Info; exakter KQ W2Z MAKED Buffer-full[0]-Hinweis ist REVIEW; andere NG-CORE-0002 Assertions bleiben blockierend.");
+                "LOG DELTA CLASSIFICATION SELFTEST: PASS · echte Logdateien/Checkpoints: neue 1669-Disconnects und Listener-Fehler blockieren; variable Zone-Startsnapshots werden vollständig verglichen; neue Fehler und zusätzliche Warnungen bleiben sichtbar, gewöhnliche Logkürzungen bleiben REVIEW; gemischte Debug/KQ/echte Assertions bleiben getrennt erkennbar.");
         }
         catch (Exception ex)
         {
@@ -551,6 +576,129 @@ public sealed class ZonePoolRuntimeLogDeltaAudit
                 false,
                 "LOG DELTA CLASSIFICATION SELFTEST: FAIL · " + ex.Message);
         }
+    }
+
+    private static void VerifyFileClassification(string scriptDebug, string kqBufferAssert, string realAssert)
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "NextGenLogDeltaSelfTest-" + Guid.NewGuid().ToString("N"));
+        var serverRoot = Path.Combine(tempRoot, "server");
+        var zoneRoot = Path.Combine(serverRoot, "Zone00");
+        Directory.CreateDirectory(zoneRoot);
+        try
+        {
+            var audit = new ZonePoolRuntimeLogDeltaAudit();
+            var log = Path.Combine(zoneRoot, "MoreDisconnectLog2026101523.txt");
+            var checkpoint = Path.Combine(tempRoot, "checkpoint.json");
+            File.WriteAllText(log, "23:00:00 : Char so_Disconnect HISTORICAL 1669\r\n");
+            if (!audit.SaveCheckpoint(serverRoot, checkpoint).Success)
+                throw new InvalidDataException("Logdatei-Checkpoint konnte nicht erstellt werden.");
+            File.AppendAllText(log, "23:01:00 : Char From world\r\n23:01:01 : Char so_Disconnect OTHER 16690\r\n23:01:02 : Char so_Disconnect OTHER 1668\r\n");
+            if (!audit.Audit(serverRoot, checkpoint).Clean)
+                throw new InvalidDataException("Historischer 1669-Eintrag oder anderer Disconnect-Grund blockiert fälschlich.");
+
+            const string liveDisconnect = "23:39:42 : Char so_Disconnect TEST_CLIENT 1669";
+            File.AppendAllText(log, liveDisconnect + "\r\n");
+            var disconnectResult = audit.Audit(serverRoot, checkpoint);
+            if (!disconnectResult.Blocked || disconnectResult.Clean
+                || !disconnectResult.Findings.Any(f => f.Code == "NG-ZONE-0023" && f.Blocking && f.Evidence == liveDisconnect))
+                throw new InvalidDataException("Neuer realer 1669-Disconnect wurde nicht blockierend erkannt.");
+            var analyzer = new LogAnalyzer();
+            if (!analyzer.Analyze(new[] { "23:39:42 : so_Disconnect[1669]" }, log).Any(i => i.Code == "NG-ZONE-0023"))
+                throw new InvalidDataException("1669-Klammerformat wurde nicht erkannt.");
+
+            var mixedCheckpoint = Path.Combine(tempRoot, "mixed-checkpoint.json");
+            if (!audit.SaveCheckpoint(serverRoot, mixedCheckpoint).Success)
+                throw new InvalidDataException("Gemischter Log-Checkpoint konnte nicht erstellt werden.");
+            var assertionLog = Path.Combine(zoneRoot, "Assert2026101523.txt");
+            File.WriteAllText(assertionLog, scriptDebug + "\r\n");
+            if (!audit.Audit(serverRoot, mixedCheckpoint).Clean)
+                throw new InvalidDataException("Alleinige Script-Debugmeldung ist nicht CLEAN.");
+            File.AppendAllText(assertionLog, kqBufferAssert + "\r\n");
+            var kqResult = audit.Audit(serverRoot, mixedCheckpoint);
+            if (!kqResult.ReviewRequired || kqResult.Blocked || kqResult.Clean)
+                throw new InvalidDataException("KQ-Hinweis nach Script-Debugmeldung ist nicht REVIEW.");
+            File.AppendAllText(assertionLog, realAssert + "\r\n");
+            var mixedResult = audit.Audit(serverRoot, mixedCheckpoint);
+            if (!mixedResult.Blocked || mixedResult.Clean
+                || !mixedResult.Findings.Any(f => f.Code == "NG-CORE-0002" && f.Blocking && f.Evidence == realAssert)
+                || !mixedResult.Findings.Any(f => f.Code == "NG-KQ-MAKE-BUFFER" && !f.Blocking)
+                || !mixedResult.Findings.Any(f => f.Code == "NG-SCRIPT-DEBUG" && !f.Blocking))
+                throw new InvalidDataException("Debug-Assertion verdeckt nachfolgende KQ-/echte Assertion in derselben Datei.");
+
+            var wmLogs = Path.Combine(serverRoot, "WorldManager", "DebugMessage");
+            Directory.CreateDirectory(wmLogs);
+            var listenerLog = Path.Combine(wmLogs, "Msg_2026-10-21.txt");
+            foreach (var failure in new[]
+            {
+                "000034 2026-10-21 10:25:38 *FAILED Listen_Add - IP = 127.0.0.1:9012",
+                "000089 2026-10-21 10:27:35 *FAILED LISTEN ADD, IP=127.0.0.1:9013, From=SERVER_ID_CLIENT*"
+            })
+            {
+                File.AppendAllText(listenerLog, failure + "\r\n");
+                var listenerCheckpoint = Path.Combine(tempRoot, Guid.NewGuid() + ".json");
+                if (!audit.SaveCheckpoint(serverRoot, listenerCheckpoint).Success)
+                    throw new InvalidDataException("Listener log checkpoint failed.");
+                File.AppendAllText(listenerLog,
+                    "000087 2026-10-21 10:27:34 <SUCCESSED LISTEN ADD, IP=127.0.0.1:9014, From=SERVER_ID_ZONE>\r\n");
+                if (!audit.Audit(serverRoot, listenerCheckpoint).Clean)
+                    throw new InvalidDataException("Historical listener error or successful listener blocked a fresh audit.");
+                File.AppendAllText(listenerLog, failure + "\r\n");
+                var listenerResult = audit.Audit(serverRoot, listenerCheckpoint);
+                if (!listenerResult.Blocked || listenerResult.Clean
+                    || !listenerResult.Findings.Any(f => f.Code == "NG-NET-0006" && f.Blocking && f.Evidence == failure))
+                    throw new InvalidDataException("Live listener bind failure was incorrectly classified CLEAN.");
+            }
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    private static void VerifyStartupRewrites()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "NextGenStartupRewrite-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(tempRoot, "server");
+        var zone = Path.Combine(root, "Zone00");
+        Directory.CreateDirectory(zone);
+        const string header = "-\r\nZoneServer::zs_start_old\r\n";
+        const string baseline = "SHN - ViewData Checksum - AbStateView.shn\r\n";
+        const string retry = "Try to connect[127.0.0.1:9014]5\r\n";
+        try
+        {
+            var audit = new ZonePoolRuntimeLogDeltaAudit();
+            var message = Path.Combine(zone, "Message.txt");
+            foreach (var retries in new[] { 1, 3 })
+            {
+                File.WriteAllText(message, header + baseline + string.Concat(Enumerable.Repeat(retry, 2)));
+                var checkpoint = Path.Combine(tempRoot, Guid.NewGuid() + ".json");
+                if (!audit.SaveCheckpoint(root, checkpoint).Success) throw new InvalidDataException("Startup checkpoint failed.");
+                File.WriteAllText(message, header + baseline + string.Concat(Enumerable.Repeat(retry, retries)));
+                var result = audit.Audit(root, checkpoint);
+                if (!result.Clean || !result.EvidenceComplete || result.RewrittenFileCount != 1)
+                    throw new InvalidDataException("Variable-length startup snapshot was treated as lost log evidence.");
+                // A new fault before the old byte offset must not be skipped when the file grows.
+                File.WriteAllText(message, header + "access violation\r\n" + baseline + string.Concat(Enumerable.Repeat(retry, retries)));
+                if (!audit.Audit(root, checkpoint).Blocked)
+                    throw new InvalidDataException("Rewritten startup fault was missed before the old byte offset.");
+                File.WriteAllText(message, header + baseline + baseline + string.Concat(Enumerable.Repeat(retry, retries)));
+                if (!audit.Audit(root, checkpoint).ReviewRequired)
+                    throw new InvalidDataException("Additional occurrence of an existing warning was hidden.");
+                File.WriteAllText(message, "unknown startup format\r\naccess violation\r\n");
+                var unknown = audit.Audit(root, checkpoint);
+                if (!unknown.Blocked || unknown.EvidenceComplete)
+                    throw new InvalidDataException("Unknown startup format hid crash evidence or bypassed the continuity guard.");
+            }
+            var appendLog = Path.Combine(zone, "DebugMessage.txt");
+            File.WriteAllText(appendLog, header + baseline + retry + retry);
+            var ordinaryCheckpoint = Path.Combine(tempRoot, "ordinary.json");
+            if (!audit.SaveCheckpoint(root, ordinaryCheckpoint).Success) throw new InvalidDataException("Ordinary checkpoint failed.");
+            File.WriteAllText(appendLog, header + baseline);
+            var truncated = audit.Audit(root, ordinaryCheckpoint);
+            if (!truncated.ReviewRequired || truncated.EvidenceComplete)
+                throw new InvalidDataException("Ordinary log truncation lost its evidence-gap guard.");
+        }
+        finally { Directory.Delete(tempRoot, recursive: true); }
     }
 
     private static IReadOnlyList<string> GetIntroducedLines(IReadOnlyList<string> oldLines, IReadOnlyList<string> currentLines)

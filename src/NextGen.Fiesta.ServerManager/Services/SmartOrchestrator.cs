@@ -119,6 +119,16 @@ public sealed class SmartOrchestrator
             var svc = all.FirstOrDefault(x => x.Kind == kind);
             if (svc is not null) await StopIfRunning(svc, ct);
         }
+
+        var incomplete = new List<string>();
+        foreach (var svc in all)
+        {
+            var state = await _services.QueryAsync(svc.ServiceName, ct);
+            if (state.State is not (ServiceRuntimeState.Stopped or ServiceRuntimeState.Missing))
+                incomplete.Add($"{svc.ServiceName}: {state.State}");
+        }
+        if (incomplete.Count > 0)
+            throw new InvalidOperationException("Smart Stop unvollständig: " + string.Join(", ", incomplete));
         Report("Smart Stop abgeschlossen.");
     }
 
@@ -142,7 +152,9 @@ public sealed class SmartOrchestrator
         var start = await _services.StartAsync(svc.ServiceName, ct);
         if (!start.Success && !start.StdOut.Contains("already", StringComparison.OrdinalIgnoreCase))
             Report($"Startmeldung {svc.ServiceName}: {start.StdOut} {start.StdErr}".Trim(), DiagnosticSeverity.Warning);
-        if (!await _services.WaitForStateAsync(svc.ServiceName, ServiceRuntimeState.Running, TimeSpan.FromSeconds(25), ct))
+        // Cold database/session-worker initialization can exceed 25 seconds even when
+        // the service starts successfully. Keep a bounded wait for SCM RUNNING.
+        if (!await _services.WaitForStateAsync(svc.ServiceName, ServiceRuntimeState.Running, TimeSpan.FromSeconds(60), ct))
             throw new InvalidOperationException($"{svc.DisplayName} erreicht den Zustand RUNNING nicht.");
     }
 
@@ -170,10 +182,14 @@ public sealed class SmartOrchestrator
     private async Task StopIfRunning(FiestaServiceEntry svc, CancellationToken ct)
     {
         var state = await _services.QueryAsync(svc.ServiceName, ct);
-        if (state.State != ServiceRuntimeState.Running) return;
+        if (state.State is ServiceRuntimeState.Stopped or ServiceRuntimeState.Missing) return;
         Report($"Stoppe {svc.DisplayName} …");
-        await _services.StopAsync(svc.ServiceName, ct);
-        await _services.WaitForStateAsync(svc.ServiceName, ServiceRuntimeState.Stopped, TimeSpan.FromSeconds(25), ct);
+        // A previous stop may still be draining sessions. Wait for it instead of
+        // ignoring STOP_PENDING or sending a duplicate stop control.
+        if (state.State != ServiceRuntimeState.StopPending)
+            await _services.StopAsync(svc.ServiceName, ct);
+        if (!await _services.WaitForStateAsync(svc.ServiceName, ServiceRuntimeState.Stopped, TimeSpan.FromSeconds(60), ct))
+            Report($"{svc.DisplayName} ist nach 60 Sekunden noch nicht gestoppt.", DiagnosticSeverity.Error);
     }
 
     private async Task<bool> WaitPortAsync(int port, TimeSpan timeout, CancellationToken ct)

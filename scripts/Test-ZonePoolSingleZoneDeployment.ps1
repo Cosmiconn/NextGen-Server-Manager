@@ -35,7 +35,7 @@ Write-Host 'WICHTIG:'
 Write-Host '- kein Zone-Prozess darf laufen'
 Write-Host '- die angegebene Zone.exe wird nur gelesen und niemals ersetzt'
 Write-Host '- alle Schreibvorgaenge finden in einem frischen TEMP-Verzeichnis statt'
-Write-Host '- testet 2000/12000/512 Binary, Zone00-Listener 1500/2000 und zwei Rollback-Zyklen'
+Write-Host '- testet 2000/12000/512 Binary, Zone00-Listener 1500/2000 und drei Rollback-Zyklen'
 Write-Host '- alle Backups und SHA-256-Pruefungen werden im TEMP-Verzeichnis ausgefuehrt'
 Write-Host ''
 

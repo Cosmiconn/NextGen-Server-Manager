@@ -9,7 +9,8 @@ namespace NextGen.Fiesta.ServerManager.Services;
 
 /// <summary>
 /// Minimal NA2016 client used only for controlled load testing against the user's own server.
-/// It follows the real Login -> World -> Zone protocol path and intentionally does not implement gameplay.
+/// It follows the real Login -> World -> Zone protocol path. Gameplay is disabled
+/// by default; an explicit short movement pilot records sends, not server acceptance.
 /// Server -> client packets are plaintext. Client -> server packets use the 499-byte NA2016 XOR stream.
 /// </summary>
 public sealed class FiestaHeadlessLoadClient
@@ -116,6 +117,7 @@ public sealed class FiestaHeadlessLoadClient
         credential.Validate();
 
         var stage = FiestaLoadClientStage.None;
+        FiestaZoneActorIdentity? zoneActor = null;
         void SetStage(FiestaLoadClientStage next, string detail = "")
         {
             stage = next;
@@ -249,11 +251,13 @@ public sealed class FiestaHeadlessLoadClient
                     // is authoritative and any disconnect remains a hard failure.
                     var zoneAck = await WaitForInitialZoneLoginAckAsync(
                         candidate, options.ZoneLoginTimeout, cancellationToken);
+                    zoneActor = zoneAck.Actor;
                     authenticatedZoneConnection = candidate;
                     candidate = null;
                     SetStage(
                         FiestaLoadClientStage.ZoneAuthenticated,
                         $"NC_MAP_LOGIN_ACK SH6/2 empfangen · Zone-Handoff Versuch {attempt}/{InitialZoneTransferMaxAttempts} " +
+                        $"· ActorHandle={zoneActor.Handle} · LoginXY={zoneActor.LoginX},{zoneActor.LoginY} " +
                         $"· Vor ACK: {zoneAck.ReceivedBeforeAck} Zone-Pakete · {zoneAck.ElapsedMs:N0} ms " +
                         $"· BodyBytes vor ACK: {zoneAck.BodyBytesBeforeAck} · OpcodeMix: {zoneAck.OpcodeMix} " +
                         $"· letzte Opcodes: {zoneAck.RecentOpcodes}");
@@ -369,6 +373,11 @@ public sealed class FiestaHeadlessLoadClient
                 ?? throw new InvalidOperationException(
                     $"Zone-Handoff erreichte SH6/2 nach {InitialZoneTransferMaxAttempts} Versuch(en) nicht.");
 
+            using var mobVisibility = options.ObserveMobVisibility
+                ? new FiestaMobVisibilitySession(zoneActor
+                    ?? throw new InvalidDataException("Mob observation requires an authenticated Zone actor."))
+                : null;
+
             await zoneConnection.SendPacketAsync(
                 6,
                 3,
@@ -379,10 +388,11 @@ public sealed class FiestaHeadlessLoadClient
                 "NC_MAP_LOGINCOMPLETE_CMD CH6/3 gesendet");
 
             var holdFor = options.HoldDuration;
+            FiestaMovementPilotCommands? movementCommands = null;
             if (holdFor > TimeSpan.Zero)
             {
                 SetStage(FiestaLoadClientStage.Holding);
-                await HoldSessionsAsync(
+                movementCommands = await HoldSessionsAsync(
                     worldSession.Connection,
                     zoneConnection,
                     holdFor,
@@ -392,7 +402,7 @@ public sealed class FiestaHeadlessLoadClient
                         FiestaLoadClientStage.Holding,
                         heartbeatDetail,
                         DateTimeOffset.UtcNow)),
-                    cancellationToken);
+                    cancellationToken, options.MovementPilot, zoneActor, mobVisibility);
             }
 
             SetStage(FiestaLoadClientStage.Completed);
@@ -406,6 +416,9 @@ public sealed class FiestaHeadlessLoadClient
                 ZonePort = zone.Port,
                 RandomId = randomId,
                 CharacterCount = characterCount,
+                ZoneActor = zoneActor,
+                MovementCommands = movementCommands,
+                MobVisibilityAtHoldEnd = mobVisibility?.Snapshot(),
                 Detail = $"HEADLESS CLIENT PASS · Login/World/Zone vollständig · Charakter '{credential.CharacterName}' · Zone {zone.Host}:{zone.Port}."
             };
         }
@@ -1378,15 +1391,22 @@ public sealed class FiestaHeadlessLoadClient
     private static bool IsIgnorablePostReadyWorldFrameTermination(InvalidDataException ex)
         => ex.Message.Contains("Fiesta-Frame meldet Länge 0", StringComparison.OrdinalIgnoreCase);
 
-    private static async Task HoldSessionsAsync(
+    internal static async Task<FiestaMovementPilotCommands?> HoldSessionsAsync(
         FiestaWireConnection worldConnection,
         FiestaWireConnection zoneConnection,
         TimeSpan duration,
         Action<string>? zoneHeartbeatProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FiestaMovementPilotPlan? movementPilot = null,
+        FiestaZoneActorIdentity? zoneActor = null,
+        FiestaMobVisibilitySession? mobVisibility = null)
     {
+        movementPilot?.Validate(duration);
+        movementPilot?.VerifyActor(zoneActor);
+        if (mobVisibility is not null && mobVisibility.Actor != zoneActor)
+            throw new InvalidOperationException("Mob visibility belongs to a different authenticated Zone actor.");
         if (duration <= TimeSpan.Zero)
-            return;
+            return null;
 
         using var holdCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         holdCts.CancelAfter(duration);
@@ -1402,16 +1422,43 @@ public sealed class FiestaHeadlessLoadClient
             "Zone",
             allowRemoteClose: false,
             zoneHeartbeatProgress,
-            holdCts.Token);
+            holdCts.Token,
+            rejectMovementFailure: movementPilot is not null,
+            mobVisibility: mobVisibility);
 
+        async Task CancelSiblingOnFailure(Task pump)
+        {
+            try { await pump; }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Task.WhenAll alone waits for the other pump's entire hold even
+                // when Zone has already disconnected. Wake it and retain the
+                // original non-cancellation failure. Normal World handoff closure
+                // remains allowed and must not cancel a healthy Zone session.
+                holdCts.Cancel();
+                throw;
+            }
+        }
+
+        var worldTask = CancelSiblingOnFailure(worldPump);
+        var zoneTask = CancelSiblingOnFailure(zonePump);
+        var movementTask = movementPilot is null ? null
+            : FiestaMovementPilot.SendAsync(zoneConnection, zoneActor!, movementPilot, holdCts.Token);
         try
         {
-            await Task.WhenAll(worldPump, zonePump);
+            var tasks = new List<Task> { worldTask, zoneTask };
+            if (movementTask is not null) tasks.Add(CancelSiblingOnFailure(movementTask));
+            await Task.WhenAll(tasks);
         }
         catch (OperationCanceledException) when (holdCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             // Expected end of the requested hold interval.
         }
+        cancellationToken.ThrowIfCancellationRequested();
+        if (movementTask is null) return null;
+        if (!movementTask.IsCompletedSuccessfully)
+            throw new InvalidOperationException("Session ended before the complete movement pilot interval.");
+        return await movementTask;
     }
 
     private static async Task PumpSessionAsync(
@@ -1419,7 +1466,9 @@ public sealed class FiestaHeadlessLoadClient
         string role,
         bool allowRemoteClose,
         Action<string>? heartbeatProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool rejectMovementFailure = false,
+        FiestaMobVisibilitySession? mobVisibility = null)
     {
         var serverHeartbeatRequests = 0;
         DateTimeOffset? lastServerHeartbeatUtc = null;
@@ -1467,6 +1516,18 @@ public sealed class FiestaHeadlessLoadClient
                 var packet = await connection.ReadPacketAsync(
                     TimeSpan.FromSeconds(45),
                     cancellationToken);
+
+                mobVisibility?.Observe(packet.Header, packet.Type, packet.Body);
+
+                if (rejectMovementFailure && packet.Header == 8 && packet.Type == 27)
+                {
+                    if (packet.Body.Length != 8)
+                        throw new InvalidDataException("NA2016 movement rejection must contain 8 body bytes.");
+                    throw new InvalidOperationException(
+                        $"Zone rejected movement (SH8/27); return position " +
+                        $"{BinaryPrimitives.ReadUInt32LittleEndian(packet.Body)}," +
+                        $"{BinaryPrimitives.ReadUInt32LittleEndian(packet.Body.AsSpan(4))}.");
+                }
 
                 if (packet.Header == 2 && packet.Type == 4)
                 {
@@ -1570,8 +1631,8 @@ public sealed class FiestaHeadlessLoadClient
                 .Select(pair => $"SH{pair.Key.Header}/{pair.Key.Type}=" +
                     $"{pair.Value.Count}({pair.Value.BodyBytes}B)"));
 
-    private static async Task<(int ReceivedBeforeAck, long ElapsedMs, string RecentOpcodes,
-        long BodyBytesBeforeAck, string OpcodeMix)>
+    internal static async Task<(int ReceivedBeforeAck, long ElapsedMs, string RecentOpcodes,
+        long BodyBytesBeforeAck, string OpcodeMix, FiestaZoneActorIdentity Actor)>
         WaitForInitialZoneLoginAckAsync(
         FiestaWireConnection connection,
         TimeSpan timeout,
@@ -1649,7 +1710,8 @@ public sealed class FiestaHeadlessLoadClient
                     (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
                     precedingOpcodes,
                     bodyBytesBeforeAck,
-                    FormatInitialZoneOpcodeMix(opcodeCounts));
+                    FormatInitialZoneOpcodeMix(opcodeCounts),
+                    FiestaMovementProtocol.ReadLoginIdentity(packet.Body));
         }
 
         throw new TimeoutException($"Zone SH6/2 nach {timeout.TotalSeconds:N0}s nicht empfangen · {Snapshot()}.");
@@ -2109,6 +2171,10 @@ public sealed class FiestaHeadlessProbeOptions
     public TimeSpan StepTimeout { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan ZoneLoginTimeout { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan HoldDuration { get; init; } = TimeSpan.FromMinutes(5);
+    public FiestaMovementPilotPlan? MovementPilot { get; init; }
+    // Passive pilot only. Collects appearances after authentication; does not
+    // select targets, send attacks, or change the normal idle ramp by default.
+    public bool ObserveMobVisibility { get; init; }
     // Diagnostic only: extra FULL client-cycle after four failed Zone logins.
     // Disabled by default. Never changes the Zone pool's PASS criteria.
     public int DelayedZoneReentryAttempts { get; init; }
@@ -2124,6 +2190,9 @@ public sealed class FiestaHeadlessProbeOptions
         if (ClientTag.Length > 8) throw new ArgumentException("ClientTag darf maximal 8 ASCII-Zeichen lang sein.");
         if (StepTimeout <= TimeSpan.Zero || ZoneLoginTimeout <= TimeSpan.Zero) throw new ArgumentException("Timeouts müssen positiv sein.");
         if (HoldDuration < TimeSpan.Zero) throw new ArgumentException("HoldDuration darf nicht negativ sein.");
+        MovementPilot?.Validate(HoldDuration);
+        if (ObserveMobVisibility && HoldDuration <= TimeSpan.Zero)
+            throw new ArgumentException("Mob visibility observation requires a positive hold duration.");
         if (DelayedZoneReentryAttempts is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(DelayedZoneReentryAttempts));
         if (RequiredZonePort.HasValue && RequiredZonePort.Value is <= 0 or > 65535)
@@ -2180,6 +2249,9 @@ public sealed class FiestaHeadlessProbeResult
     public int ZonePort { get; init; }
     public ushort RandomId { get; init; }
     public int CharacterCount { get; init; }
+    public FiestaZoneActorIdentity? ZoneActor { get; init; }
+    public FiestaMovementPilotCommands? MovementCommands { get; init; }
+    public FiestaMobVisibilityObservation? MobVisibilityAtHoldEnd { get; init; }
     public string Detail { get; init; } = string.Empty;
 }
 
@@ -2273,6 +2345,7 @@ internal sealed class FiestaWireConnection : IAsyncDisposable
     private readonly TcpClient _client;
     private readonly NetworkStream _stream;
     private readonly FiestaXorCipher _clientToServerCipher;
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
 
     private FiestaWireConnection(TcpClient client, NetworkStream stream, FiestaXorCipher cipher)
     {
@@ -2324,18 +2397,44 @@ internal sealed class FiestaWireConnection : IAsyncDisposable
 
     public async Task SendDecryptedPayloadAsync(byte[] decryptedPayload, CancellationToken cancellationToken)
     {
-        if (decryptedPayload.Length < 2) throw new ArgumentException("Payload ist zu kurz.", nameof(decryptedPayload));
+        if (decryptedPayload.Length is < 2 or > ushort.MaxValue)
+            throw new ArgumentException("Payload muss 2..65535 Byte enthalten.", nameof(decryptedPayload));
+        // Heartbeats and active load share both the cipher position and wire order.
+        // Protect the entire operation, not just the NetworkStream write.
         var encrypted = decryptedPayload.ToArray();
-        _clientToServerCipher.TransformInPlace(encrypted);
-        var frame = FramePayload(encrypted);
-        await _stream.WriteAsync(frame, cancellationToken);
-        await _stream.FlushAsync(cancellationToken);
+        await _sendGate.WaitAsync(cancellationToken);
+        var cipherAdvanced = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _clientToServerCipher.TransformInPlace(encrypted);
+            cipherAdvanced = true;
+            var frame = FramePayload(encrypted);
+            await _stream.WriteAsync(frame, cancellationToken);
+            await _stream.FlushAsync(cancellationToken);
+        }
+        catch
+        {
+            // A partially written/cancelled frame cannot be retried on this cipher
+            // stream. Close it so another sender cannot silently continue out of sync.
+            if (cipherAdvanced) _client.Dispose();
+            throw;
+        }
+        finally { _sendGate.Release(); }
     }
 
     public async Task<FiestaPacket> ReadPacketAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var payload = await ReadFrameAsync(_stream, timeout, cancellationToken);
-        return FiestaPacket.FromPayload(payload);
+        try
+        {
+            var payload = await ReadFrameAsync(_stream, timeout, cancellationToken);
+            return FiestaPacket.FromPayload(payload);
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException)
+        {
+            _client.Dispose();
+            throw;
+        }
     }
 
     internal static byte[] FramePayload(ReadOnlySpan<byte> payload)
@@ -2364,10 +2463,12 @@ internal sealed class FiestaWireConnection : IAsyncDisposable
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(timeout);
+        var frameStarted = false;
         try
         {
             var first = new byte[1];
             await ReadExactlyAsync(stream, first, timeoutCts.Token);
+            frameStarted = true;
             int length;
             if (first[0] == 0)
             {
@@ -2387,6 +2488,8 @@ internal sealed class FiestaWireConnection : IAsyncDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            if (frameStarted)
+                throw new IOException("Fiesta-Frame begann, wurde aber nicht vollständig empfangen; Verbindung ist nicht fortsetzbar.");
             throw new TimeoutException($"Fiesta-Paket wurde nicht innerhalb von {timeout.TotalSeconds:N1}s vollständig empfangen.");
         }
     }

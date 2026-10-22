@@ -42,6 +42,37 @@ public sealed class ZonePoolPatchedCopyVerifier
         if (metadata is null)
             return Failed("Patch-Metadaten konnten nicht deserialisiert werden.");
 
+        return VerifyImages(patched, baseline, backupPath, metadata);
+    }
+
+    /// <summary>
+    /// Verify a deployed/rollback image against the registered baseline backup.
+    /// Rollback archives have no writer sidecars. Reconstruct the same certified
+    /// manifest and prove all 83 replacements and the exact inverse image instead.
+    /// </summary>
+    public ZonePoolPatchedCopyVerificationResult VerifyAgainstBaseline(
+        string patchedZoneExePath, string baselineBackupPath)
+    {
+        if (string.IsNullOrWhiteSpace(patchedZoneExePath)
+            || string.IsNullOrWhiteSpace(baselineBackupPath))
+            return Failed("Patch- oder Baseline-Backuppfad fehlt.");
+
+        try
+        {
+            var backupPath = Path.GetFullPath(baselineBackupPath);
+            var patched = File.ReadAllBytes(Path.GetFullPath(patchedZoneExePath));
+            var baseline = File.ReadAllBytes(backupPath);
+            return VerifyImages(patched, baseline, backupPath, metadata: null);
+        }
+        catch (Exception ex)
+        {
+            return Failed("Patch-/Baseline-Verifikation fehlgeschlagen: " + ex.Message);
+        }
+    }
+
+    private ZonePoolPatchedCopyVerificationResult VerifyImages(
+        byte[] patched, byte[] baseline, string backupPath, ZonePoolOfflinePatchMetadata? metadata)
+    {
         var baselineHash = Sha256(baseline);
         var patchedHash = Sha256(patched);
         if (!baselineHash.Equals(ZonePoolOfflineWriterSelfTest.ExpectedBaselineSha256, StringComparison.OrdinalIgnoreCase))
@@ -49,13 +80,16 @@ public sealed class ZonePoolPatchedCopyVerifier
         if (!patchedHash.Equals(ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256, StringComparison.OrdinalIgnoreCase))
             return Failed("Patchkopie besitzt nicht den gepinnten 2000/12000/512-Zielhash.", baselineHash, patchedHash);
 
-        if (!metadata.BaselineSha256.Equals(baselineHash, StringComparison.OrdinalIgnoreCase)
-            || !metadata.PatchedSha256.Equals(patchedHash, StringComparison.OrdinalIgnoreCase))
+        if (metadata is not null
+            && (!string.Equals(metadata.BaselineSha256, baselineHash, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(metadata.PatchedSha256, patchedHash, StringComparison.OrdinalIgnoreCase)))
             return Failed("Sidecar-Hashes stimmen nicht mit den tatsächlichen Dateien überein.", baselineHash, patchedHash);
 
-        if (metadata.PlayerCapacity != ZonePoolOfflineWriterSelfTest.PlayerTarget
-            || metadata.MobCapacity != ZonePoolOfflineWriterSelfTest.MobTarget
-            || metadata.NpcCapacity != ZonePoolOfflineWriterSelfTest.NpcTarget)
+        if (metadata is not null
+            && (metadata.FormatVersion != 1
+                || metadata.PlayerCapacity != ZonePoolOfflineWriterSelfTest.PlayerTarget
+                || metadata.MobCapacity != ZonePoolOfflineWriterSelfTest.MobTarget
+                || metadata.NpcCapacity != ZonePoolOfflineWriterSelfTest.NpcTarget))
             return Failed("Sidecar-Profil ist nicht das zertifizierte 2000/12000/512-Profil.", baselineHash, patchedHash);
 
         var gate = _safetyGate.Evaluate(
@@ -73,21 +107,23 @@ public sealed class ZonePoolPatchedCopyVerifier
                 baselineHash, patchedHash, gate);
 
         var expectedChanged = manifest.ChangedSites.OrderBy(x => x.FileOffset).ToArray();
-        var metadataSites = metadata.ChangedSites.OrderBy(x => x.FileOffset).ToArray();
-        if (metadata.ChangedSiteCount != expectedChanged.Length || metadataSites.Length != expectedChanged.Length)
-            return Failed($"Sidecar-Sitezahl stimmt nicht: {metadataSites.Length}/{metadata.ChangedSiteCount} statt {expectedChanged.Length}.",
+        var metadataSites = metadata?.ChangedSites?.OrderBy(x => x.FileOffset).ToArray();
+        if (metadata is not null
+            && (metadata.ChangedSiteCount != expectedChanged.Length || metadataSites?.Length != expectedChanged.Length))
+            return Failed($"Sidecar-Sitezahl stimmt nicht: {metadataSites?.Length}/{metadata.ChangedSiteCount} statt {expectedChanged.Length}.",
                 baselineHash, patchedHash, gate, manifest);
 
         for (var i = 0; i < expectedChanged.Length; i++)
         {
             var expected = expectedChanged[i];
-            var recorded = metadataSites[i];
-            if (!string.Equals(recorded.Name, expected.Name, StringComparison.Ordinal)
+            var recorded = metadataSites?[i];
+            if (metadataSites is not null && (recorded is null
+                || !string.Equals(recorded.Name, expected.Name, StringComparison.Ordinal)
                 || !string.Equals(recorded.Category, expected.Category, StringComparison.Ordinal)
                 || recorded.FileOffset != expected.FileOffset
                 || !string.Equals(recorded.VirtualAddress, $"0x{expected.VirtualAddress:X8}", StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(recorded.ExpectedHex, expected.ExpectedHex, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(recorded.ReplacementHex, expected.ReplacementHex, StringComparison.OrdinalIgnoreCase))
+                || !string.Equals(recorded.ReplacementHex, expected.ReplacementHex, StringComparison.OrdinalIgnoreCase)))
             {
                 return Failed("Sidecar-Site weicht vom rekonstruierten Manifest ab: " + expected.Name,
                     baselineHash, patchedHash, gate, manifest);

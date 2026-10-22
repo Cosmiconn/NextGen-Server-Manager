@@ -163,9 +163,11 @@ public sealed class ZonePoolSingleZoneTestDeployment
         if (!File.Exists(backup) || !File.Exists(record))
             return Failed("Deployment-Backup oder Deployment-Metadaten fehlen. Automatischer Rollback wird verweigert.");
         ZonePoolSingleZoneDeploymentMetadata? metadata;
+        byte[] originalMetadata;
         try
         {
-            metadata = JsonSerializer.Deserialize<ZonePoolSingleZoneDeploymentMetadata>(File.ReadAllBytes(record));
+            originalMetadata = File.ReadAllBytes(record);
+            metadata = JsonSerializer.Deserialize<ZonePoolSingleZoneDeploymentMetadata>(originalMetadata);
         }
         catch (Exception ex)
         {
@@ -206,6 +208,7 @@ public sealed class ZonePoolSingleZoneTestDeployment
 
         var stage = target + ".nextgen-rollback-stage-" + Guid.NewGuid().ToString("N");
         var recordTemp = record + ".tmp-" + Guid.NewGuid().ToString("N");
+        var replaced = false;
         try
         {
             WriteDurable(stage, File.ReadAllBytes(backup));
@@ -222,6 +225,7 @@ public sealed class ZonePoolSingleZoneTestDeployment
                 throw new IOException("Zone-Prozess wurde während des Rollback-Stagings gestartet: " + string.Join(", ", processCheck.ProcessIds.Select(x => "PID " + x)));
 
             File.Replace(stage, target, patchedAuditBackup, ignoreMetadataErrors: false);
+            replaced = true;
 
             var restoredHash = Sha256File(target);
             var auditHash = Sha256File(patchedAuditBackup);
@@ -268,7 +272,13 @@ public sealed class ZonePoolSingleZoneTestDeployment
         {
             SafeDelete(stage);
             SafeDelete(recordTemp);
-            return Failed("Rollback fehlgeschlagen: " + ex.Message, targetPath: target, backupPath: backup, recordPath: record);
+            var recovery = replaced
+                ? ZoneRollbackRecovery.RestorePreviousFile(target, patchedAuditBackup,
+                    currentHash, backupHash, record, originalMetadata)
+                : new ZoneRollbackRecovery.Result(false, "Binary wurde nicht ausgetauscht.");
+            return Failed("Rollback fehlgeschlagen: " + ex.Message + " " + recovery.Detail,
+                emergencyRollbackAttempted: replaced, emergencyRollbackSucceeded: recovery.Success,
+                targetPath: target, backupPath: backup, recordPath: record);
         }
     }
 
@@ -318,7 +328,7 @@ public sealed class ZonePoolSingleZoneTestDeployment
             || Sha256File(audit) != patched)
             return Failed("Original-Zone, Baseline-Backup oder Patch-Auditbackup haben falsche Hashes.");
 
-        var verification = _patchedCopyVerifier.Verify(audit);
+        var verification = _patchedCopyVerifier.VerifyAgainstBaseline(audit, backup);
         if (!verification.Success || verification.VerifiedSiteCount != 83
             || !verification.PatchedSha256.Equals(patched, StringComparison.OrdinalIgnoreCase))
             return Failed("Audit-Patch bestand die unabhängige 83-Site-Prüfung nicht: " + verification.Detail);

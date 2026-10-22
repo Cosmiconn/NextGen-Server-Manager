@@ -64,6 +64,9 @@ public partial class App : System.Windows.Application
                 throw new InvalidOperationException(protocolSelfTest.Detail);
             Log("HEADLESS_PROTOCOL_SELFTEST PASS · " + protocolSelfTest.Detail);
 
+            await FiestaTransportSelfTest.RunAsync();
+            Log("HEADLESS_TRANSPORT_SELFTEST PASS");
+
             var packetCaptureSelfTest = FiestaPacketCaptureRecorder.RunSelfTest();
             if (!packetCaptureSelfTest.Success)
                 throw new InvalidOperationException(packetCaptureSelfTest.Detail);
@@ -101,6 +104,9 @@ public partial class App : System.Windows.Application
             if (!loadRampTimingSelfTest.Success)
                 throw new InvalidOperationException(loadRampTimingSelfTest.Detail);
             Log("LOAD_RAMP_TIMING_SELFTEST PASS · " + loadRampTimingSelfTest.Detail);
+
+            LoadProcessSampler.RunSelfTest();
+            Log("LOAD_PROCESS_SAMPLER_SELFTEST PASS");
 
             var logDeltaClassificationSelfTest = ZonePoolRuntimeLogDeltaAudit.RunClassificationSelfTest();
             if (!logDeltaClassificationSelfTest.Success)

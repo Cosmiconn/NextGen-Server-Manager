@@ -91,11 +91,43 @@ public sealed class ZonePoolSingleZoneDeploymentSelfTest
                 return Failed("Isolierter 2000-Listener-Apply fehlgeschlagen: " + listenerInitial.Detail, testDirectory, create, deploy);
             if (!listenerService.VerifyApplied(target).Verified)
                 return Failed("Isolierter Listener nicht als 2000 verifiziert.", testDirectory, create, deploy);
+            // A reader that does not share DELETE lets validation read the metadata,
+            // but makes its final atomic replacement fail after the data-file exchange.
+            var listenerRecordBefore = File.ReadAllBytes(listenerInitial.ManifestPath);
+            using (var lockedManifest = new FileStream(listenerInitial.ManifestPath,
+                FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var rejectedRollback = listenerService.Rollback(
+                    target, ZoneClientListenerTestConfiguration.RollbackConfirmationToken);
+                if (rejectedRollback.Success || !rejectedRollback.EmergencyRollbackAttempted
+                    || !rejectedRollback.EmergencyRollbackSucceeded
+                    || Sha256File(info) != listenerInitial.AppliedSha256
+                    || !File.ReadAllBytes(listenerInitial.ManifestPath).SequenceEqual(listenerRecordBefore))
+                    return Failed("Gesperrtes Listener-Manifest hinterließ einen inkonsistenten Zustand: " +
+                        rejectedRollback.Detail, testDirectory, create, deploy);
+            }
+            if (!listenerService.VerifyApplied(target).Verified)
+                return Failed("Listener nach kompensiertem Rollback nicht mehr verifiziert.", testDirectory, create, deploy);
+
             var listenerRollback = listenerService.Rollback(
                 target, ZoneClientListenerTestConfiguration.RollbackConfirmationToken);
             if (!listenerRollback.Success || !listenerRollback.RolledBack ||
                 File.ReadAllText(info, System.Text.Encoding.Latin1) != stockServerInfo)
                 return Failed("Isolierter Listener-Rollback auf Stock scheiterte.", testDirectory, create, deploy);
+
+            var deploymentRecordBefore = File.ReadAllBytes(deploymentRecord);
+            using (var lockedRecord = new FileStream(deploymentRecord,
+                FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var rejectedRollback = _deployment.Rollback(
+                    target, ZonePoolSingleZoneTestDeployment.RollbackConfirmationToken);
+                if (rejectedRollback.Success || !rejectedRollback.EmergencyRollbackAttempted
+                    || !rejectedRollback.EmergencyRollbackSucceeded
+                    || Sha256File(target) != ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256
+                    || !File.ReadAllBytes(deploymentRecord).SequenceEqual(deploymentRecordBefore))
+                    return Failed("Gesperrter Binary-Record hinterließ einen inkonsistenten Zustand: " +
+                        rejectedRollback.Detail, testDirectory, create, deploy);
+            }
 
             var rollback = _deployment.Rollback(
                 target,
@@ -107,7 +139,7 @@ public sealed class ZonePoolSingleZoneDeploymentSelfTest
             if (!rolledBackHash.Equals(ZonePoolOfflineWriterSelfTest.ExpectedBaselineSha256, StringComparison.OrdinalIgnoreCase))
                 return Failed("Temporäres Ziel ist nach Rollback nicht bytegenau die Baseline.", testDirectory, create, deploy, rollback);
 
-            var patchAuditBackup = target + ".nextgen-rollback-patched.bak";
+            var patchAuditBackup = rollback.RollbackPatchedBackupPath;
             if (!File.Exists(patchAuditBackup)
                 || !Sha256File(patchAuditBackup).Equals(ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256, StringComparison.OrdinalIgnoreCase))
             {
@@ -130,6 +162,45 @@ public sealed class ZonePoolSingleZoneDeploymentSelfTest
             var denied = _deployment.ReapplyRolledBack(target, "wrong-confirmation");
             if (denied.Success || Sha256File(target) != ZonePoolOfflineWriterSelfTest.ExpectedBaselineSha256)
                 return Failed("Reapply ohne explizite Freigabe darf kein Binary verändern.", testDirectory, create, deploy, rollback);
+
+            // Rollback archives intentionally have no offline-writer sidecars.
+            // Verify from the registered baseline, while rejecting damage to either image.
+            var verifier = new ZonePoolPatchedCopyVerifier();
+            var archiveVerification = verifier.VerifyAgainstBaseline(patchAuditBackup, deploymentBackup);
+            if (!archiveVerification.Success || archiveVerification.VerifiedSiteCount != 83
+                || verifier.Verify(patchAuditBackup).Success)
+                return Failed("Archivprüfung muss ohne Writer-Sidecars 83 Sites belegen; Writer-Prüfung bleibt strikt.",
+                    testDirectory, create, deploy, rollback);
+
+            var archivedBytes = File.ReadAllBytes(patchAuditBackup);
+            var damagedBytes = archivedBytes.ToArray();
+            damagedBytes[^1] ^= 1;
+            File.WriteAllBytes(patchAuditBackup, damagedBytes);
+            var rejected = _deployment.ReapplyRolledBack(
+                target, ZonePoolSingleZoneTestDeployment.ReapplyConfirmationToken);
+            if (rejected.Success || verifier.VerifyAgainstBaseline(patchAuditBackup, deploymentBackup).Success
+                || Sha256File(target) != ZonePoolOfflineWriterSelfTest.ExpectedBaselineSha256
+                || ReadMetadata(deploymentRecord)?.State != "ROLLED_BACK")
+                return Failed("Beschädigtes Patcharchiv wurde akzeptiert oder änderte den Stockzustand.",
+                    testDirectory, create, deploy, rollback);
+            File.WriteAllBytes(patchAuditBackup, archivedBytes);
+
+            var baselineBytes = File.ReadAllBytes(deploymentBackup);
+            damagedBytes = baselineBytes.ToArray();
+            damagedBytes[^1] ^= 1;
+            File.WriteAllBytes(deploymentBackup, damagedBytes);
+            rejected = _deployment.ReapplyRolledBack(
+                target, ZonePoolSingleZoneTestDeployment.ReapplyConfirmationToken);
+            if (rejected.Success || verifier.VerifyAgainstBaseline(patchAuditBackup, deploymentBackup).Success
+                || Sha256File(target) != ZonePoolOfflineWriterSelfTest.ExpectedBaselineSha256
+                || ReadMetadata(deploymentRecord)?.State != "ROLLED_BACK")
+                return Failed("Beschädigtes Baseline-Backup wurde akzeptiert oder änderte den Stockzustand.",
+                    testDirectory, create, deploy, rollback);
+            File.WriteAllBytes(deploymentBackup, baselineBytes);
+            if (verifier.VerifyAgainstBaseline(target, deploymentBackup).Success
+                || verifier.VerifyAgainstBaseline(patchAuditBackup, deploymentBackup + ".missing").Success)
+                return Failed("Stock als Patch oder fehlendes Originalbackup wurde akzeptiert.",
+                    testDirectory, create, deploy, rollback);
 
             var binaryReapply = _deployment.ReapplyRolledBack(
                 target, ZonePoolSingleZoneTestDeployment.ReapplyConfirmationToken);
@@ -164,8 +235,38 @@ public sealed class ZonePoolSingleZoneDeploymentSelfTest
                 Sha256File(patchAuditBackup) != ZonePoolOfflineWriterSelfTest.ExpectedPatchedSha256)
                 return Failed("Zweiter Binary-Rollback verlor die historisierten Patchbackups: " + secondRollback.Detail,
                     testDirectory, create, deploy, rollback);
-            if (!File.Exists(info + ".nextgen-zone-listener-rollback-applied.bak"))
-                return Failed("Erstes Listener-Audit ging beim zweiten Zyklus verloren.", testDirectory, create, deploy, rollback);
+            var firstListenerAudit = listenerRollback.AppliedAuditBackupPath;
+            var secondListenerAudit = listenerSecondRollback.AppliedAuditBackupPath;
+            if (firstListenerAudit == secondListenerAudit
+                || !File.Exists(firstListenerAudit) || !File.Exists(secondListenerAudit)
+                || Sha256File(firstListenerAudit) != listenerInitial.AppliedSha256
+                || Sha256File(secondListenerAudit) != listenerInitial.AppliedSha256)
+                return Failed("Listener-Audits wurden beim zweiten Zyklus verändert oder überschrieben.",
+                    testDirectory, create, deploy, rollback);
+
+            // Exercise another cycle from the legacy second-rollback filename:
+            // previous versions emitted this name but rejected it on reapply.
+            var legacyAudit = info + ".nextgen-zone-listener-rollback-applied-" + Guid.NewGuid().ToString("N") + ".bak";
+            File.Copy(secondListenerAudit, legacyAudit);
+            var listenerRecord = listenerSecondRollback.ManifestPath;
+            var listenerMetadata = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(listenerRecord))!;
+            listenerMetadata["AppliedAuditBackupPath"] = legacyAudit;
+            File.WriteAllText(listenerRecord, listenerMetadata.ToJsonString());
+            var thirdBinary = _deployment.ReapplyRolledBack(target, ZonePoolSingleZoneTestDeployment.ReapplyConfirmationToken);
+            var thirdListener = listenerService.ReapplyRolledBack(target, ZoneClientListenerTestConfiguration.ReapplyConfirmationToken);
+            if (!thirdBinary.Success || !thirdListener.Success || !listenerService.VerifyApplied(target).Verified)
+                return Failed("Dritter Reapply aus bestehender Listener-Audithistorie scheiterte: " +
+                    thirdBinary.Detail + " " + thirdListener.Detail, testDirectory, create, deploy, rollback);
+            var thirdListenerRollback = listenerService.Rollback(target, ZoneClientListenerTestConfiguration.RollbackConfirmationToken);
+            var thirdBinaryRollback = _deployment.Rollback(target, ZonePoolSingleZoneTestDeployment.RollbackConfirmationToken);
+            if (!thirdListenerRollback.Success || !thirdBinaryRollback.Success
+                || File.ReadAllText(info, System.Text.Encoding.Latin1) != stockServerInfo
+                || Sha256File(target) != ZonePoolOfflineWriterSelfTest.ExpectedBaselineSha256
+                || Sha256File(firstListenerAudit) != listenerInitial.AppliedSha256
+                || Sha256File(secondListenerAudit) != listenerInitial.AppliedSha256
+                || Sha256File(legacyAudit) != listenerInitial.AppliedSha256)
+                return Failed("Dritter Rollback oder Erhalt der Listener-Historie scheiterte.",
+                    testDirectory, create, deploy, rollback);
 
             var sourceHashAfter = Sha256File(source);
             if (!sourceHashAfter.Equals(sourceHashBefore, StringComparison.OrdinalIgnoreCase))
@@ -184,7 +285,7 @@ public sealed class ZonePoolSingleZoneDeploymentSelfTest
                 TemporaryDirectory = testDirectory,
                 Detail = "SELFTEST OK: isolierte Baseline-Kopie -> zertifizierte Patchkopie -> atomarer Ein-Zonen-Austausch -> " +
                          "Backup/JSON/Listener 2000 -> Stock-Rollback -> identisch verifizierter Binary+Listener-Reapply -> " +
-                         "zweiter Stock-Rollback; beide Patch-Audits erhalten, fremde Zone unberührt, Original unverändert."
+                         "dritter Stock-Rollback; Patch-/Listener-Historie erhalten, beschädigte Dateien abgelehnt, gesperrte Metadaten konsistent kompensiert, Original unverändert."
             };
         }
         catch (Exception ex)
