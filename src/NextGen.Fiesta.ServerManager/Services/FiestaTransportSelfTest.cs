@@ -11,6 +11,7 @@ public static class FiestaTransportSelfTest
     {
         FiestaMovementProtocol.RunSelfTest();
         FiestaCombatProtocol.RunSelfTest();
+        FiestaMobVisibilityProtocol.RunSelfTest();
         await RunMovementPilotTestsAsync();
         await WithConnection(async (client, server, token) =>
         {
