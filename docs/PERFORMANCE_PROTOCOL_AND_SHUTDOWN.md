@@ -1,6 +1,6 @@
 # Vorprüfung: aktive Last und Login-Stopp
 
-Stand: 21.10.2026. Protokollvorprüfung; noch kein bestandener aktiver Lasttest.
+Stand: 22.10.2026. Protokollvorprüfung; noch kein bestandener aktiver Lasttest.
 
 ## Bewegung und Kampf
 
@@ -59,6 +59,6 @@ Das erweiterte Profil erhält alle 26 bisherigen Laststufen und ergänzt 1700, 1
 
 `LoadProcessSampler` erfasst PID-/Startzeit-gebunden Prozess-CPU, den stärksten beobachteten Thread, Private Bytes, Working Set, virtuellen Speicher, Handles und Threads. Prozess-CPU wird in Prozent eines logischen Kerns angegeben und kann größer als 100 sein. Beendete Threads sind nicht nachträglich messbar. Fehlende Messungen bleiben als Lücken/Fehler sichtbar. Ressourcen-P95/P99 sind keine Gameplay-Latenzen.
 
-Release-Build und lokale Protokoll-, Zeitbudget-, Heartbeat- und Ressourcen-Selbsttests bestanden. Am 21.10. wurden nach frischen CHECKSUM-Sicherungen und RESTORE VERIFYONLY alle 400 zusätzlichen Accounts/Charaktere über das Originalprotokoll verifiziert. Der anschließende reguläre Dienststopp gelang einschließlich Login. Der geplante Lastlauf blieb wegen eines offenen Startlog-Audits aus; dessen Behandlung unterschiedlich langer Zone-Startsnapshots ist inzwischen korrigiert und getestet. Ein späterer erhöhter Kapazitätsstart wurde von Windows vor Prozessstart abgebrochen; der Nutzer sah keinen UAC-Dialog. Alle Fiesta-Dienste sind gestoppt. 2000er-Last, aktive Spielbelastung und Wiederholungsprüfung des zuvor beobachteten Login-Hängers stehen weiterhin aus.
+Release-Build und lokale Protokoll-, Zeitbudget-, Heartbeat- und Ressourcen-Selbsttests bestanden. Am 21.10. wurden nach frischen CHECKSUM-Sicherungen und RESTORE VERIFYONLY alle 400 zusätzlichen Accounts/Charaktere über das Originalprotokoll verifiziert. Der anschließende reguläre Dienststopp gelang einschließlich Login. Der geplante Lastlauf blieb wegen eines offenen Startlog-Audits aus; dessen Behandlung unterschiedlich langer Zone-Startsnapshots ist inzwischen korrigiert und getestet. Der spätere Start um 20:29 Uhr gelang: 32 neue Identitäten bestanden den Pilot mit zwei Minuten Endlast, 24 exakten Stabilitätsproben, erfülltem Heartbeat-Gate und CLEAN-Audits. Gespeicherte Positionen und ein zusätzlicher Login je Charakter wurden bestätigt; der reguläre Stopp einschließlich Login gelang. Die anschließende 2000er-Rampe endete nach bestandener 350er-Stufe und ClientReady 367 durch einen Windows-Bugcheck 0x7C. Endlast und Abschlussaudit fehlen. Derselbe Bugcheck war am Vortag aufgetreten; die lokale Treiberdiagnose ist vor weiterer Last erforderlich. Nach dem Neustart sind alle Fiesta-Dienste gestoppt, alle 2000 geplanten Positionen bestätigt und beide ASUS-Ports wieder belegt. 2000er-Last, aktive Spielbelastung und Wiederholungsprüfung des zuvor beobachteten Login-Hängers stehen weiterhin aus.
 
 Siehe [vollständige Abschlusskriterien](PERFORMANCE_COMPLETION_PLAN.md). Private Mitschnitte, Symboldumps, Datenbanksicherungen und Zugangsdaten bleiben lokal.

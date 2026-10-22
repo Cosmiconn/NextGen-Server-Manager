@@ -1,6 +1,6 @@
 # Abschlussprüfung Serverleistung
 
-Stand: 21.10.2026. Noch nicht abgeschlossen.
+Stand: 22.10.2026. Noch nicht abgeschlossen.
 
 Die beiden verteilten 1600er-Tests bleiben die Vergleichsbasis. Sie ersetzen weder einen 2000er-Test noch aktive Spielbelastung. Originalnachweise bleiben unverändert.
 
@@ -8,14 +8,18 @@ Der erhöhte Vorbereitungslauf am 21.10. gelang nach dem ausdrücklich genehmigt
 
 Der Anschlusscontroller startete keinen Lasttest, weil der Vorbereitungsaudit REVIEW meldete. Die kleine Zone-Startübersicht `Message.txt` war beim Neustart um eine wiederholte Verbindungszeile kürzer geworden. Der Audit vergleicht nun bei diesem bekannten Dateityp auch unterschiedlich lange, vollständig gesicherte Snapshots. Neue Fehler am Dateianfang, zusätzliche Warnungen und unbekannte Formate bleiben sichtbar; normale Logkürzungen behalten ihre Evidenzlücke. Regression vor der Korrektur fehlgeschlagen, danach bestanden. Eine spätere erneute Auswertung hat keine Snapshot-Evidenzlücke mehr, enthält aber bereits die regulären Shutdown-Meldungen und bleibt daher REVIEW. Der ursprüngliche Bericht bleibt unverändert.
 
-Der erneute erhöhte Kapazitätsstart um 11:26 Uhr wurde von Windows vor Prozessstart abgebrochen; der Nutzer sah erneut keinen UAC-Dialog. Aktuell läuft kein Live-Test. Vor dem nächsten Lastlauf werden Startlogs separat geprüft; die Abschlussprüfung und der verifizierte ASUS-Rückstart bleiben Teil des vorbereiteten Ablaufs.
+Ein späterer erhöhter Start am 21.10. um 20:29 Uhr gelang. Der Pilot mit 32 neuen Identitäten bestand die Stufen 1/10/32, zwei Minuten Endlast und 24 exakte Stabilitätsproben; das Heartbeat-Gate wurde erfüllt. Start- und Laufzeitaudits waren CLEAN. Alle 32 gespeicherten Positionen und genau ein zusätzlicher Login je Pilotcharakter wurden geprüft. Der reguläre Dienststopp gelang einschließlich Login. Zone, WorldManager und Generator lieferten jeweils 44 Ressourcenproben ohne Messfehler. Dieser Pilot ersetzt keinen Last- oder Gameplay-Nachweis für 2000 Spieler.
+
+Die anschließende Kapazitätsrampe wurde durch einen Windows-Absturz unterbrochen. Letzte bestandene Stufe: 350; letzter protokollierter ClientReady: 367 um 20:50:21 Uhr. Windows protokollierte anschließend einen Neustart nach Bugcheck `0x7C` mit den ersten drei Parametern `0x32, 0x5, 0x18`. Derselbe Code mit denselben ersten drei Parametern war bereits am Vortag aufgetreten. Laut [Microsoft-Dokumentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x7c--bugcode-ndis-driver) bezeichnet `0x7C` einen erkannten Fehler in einem Netzwerktreiber; der verantwortliche Treiber ist noch nicht bestimmt. Die geschützten Minidumps müssen vor weiterer Last lokal ausgewertet werden. Es fehlen Endlast, Abschlussaudit und regulärer Cleanup-Nachweis dieser Rampe; sie gilt nicht als bestanden.
+
+Die Prüfung nach dem Neustart bestätigt: alle 13 Fiesta-Dienste gestoppt, kein Lastgenerator aktiv, alle 2000 geplanten Charakterpositionen exakt und positive HP. Der ASUS-Prozess bedient wieder beide ursprünglichen Ports. Der Neustart verhinderte den Controller-Cleanup; die 400 neuen Positionen wurden nicht zurückgesetzt. Der vorher angelegte Positionssnapshot bleibt verfügbar. Originalberichte und unvollständige Controllerzustände bleiben unverändert; ein separater Unterbrechungsaudit hält den tatsächlichen Endzustand fest.
 
 Der Logaudit blockiert nun beide tatsächlich beobachteten `FAILED Listen_Add`-/`FAILED LISTEN ADD`-Formate als `NG-NET-0006`. Die Regression prüft neue Fehler, historische Einträge und erfolgreiche Listener getrennt. Eine separate erneute Auswertung des fehlgeschlagenen Starts erkannte beide Portfehler; die ursprünglichen Nachweise wurden nicht überschrieben. Daraus folgt noch kein erfolgreicher Lasttest.
 
 | Anforderung | Abnahmebeleg | Aktueller Stand |
 | --- | --- | --- |
 | 2000 gleichzeitige Spieler | Strenge Rampe mit denselben Gates wie bisher, exakte Client-/ShinePlayer-Zahlen, frische Heartbeats, mindestens 30 Minuten Endlast, vollständiger Start-/Laufzeit-Logaudit | Profil und Heartbeat-Gate implementiert, Selbsttests bestanden; alle 2000 Identitäten provisioniert und Datenbankbindung geprüft; Live-Test offen |
-| Ressourcen unter Last | Zeitreihe für Zone, WorldManager und Lastgenerator: Prozess- und stärkste Thread-CPU, Private Bytes, Working Set, Handles, Threads; Messausfälle sichtbar | Sampler implementiert und am Testprozess geprüft; Serverlast-Messung offen |
+| Ressourcen unter Last | Zeitreihe für Zone, WorldManager und Lastgenerator: Prozess- und stärkste Thread-CPU, Private Bytes, Working Set, Handles, Threads; Messausfälle sichtbar | Vollständige Messung im 32er-Pilot; Teilzeitreihe bis zum Hostabsturz in der Kapazitätsrampe. 2000er-Messung offen |
 | Bewegung | Verifiziertes NA2016-Paketformat, kleiner Pilot mit serverseitig bestätigten Positionsänderungen, anschließend kontrollierte skalierte Last und Latenzmessung | Einzelpilot implementiert, Sitzungs-/Startpositionsbindung und Abbruchpfade im TCP-Test bestanden; lokaler Runner mit separater Datenbankprüfung vorbereitet; Live-Pilot, Skalierung und Latenzmessung offen |
 | Kampf | Verifiziertes Ziel-/Angriffsformat, serverseitig bestätigter Effekt, Pilot und skalierte Wiederholung; keine bloße Paketanzahl als Erfolg | Zielwahl-/Basisangriffsencoder und Zielantwortdecoder gegen Originalmitschnitt geprüft; Trefferdecoder anhand der PDB mit synthetischen Tests vorbereitet. Aktuelle Zielbindung, Live-Treffer, Pilot und Skalierung offen |
 | Disconnect 1669 | Nachweis des fehlerhaften Pfads bei reproduzierbarem Fehler oder überprüfte betriebliche Abhilfe mit klaren Grenzen; keine ungeprüfte Binäränderung | Verteilte Spawns bis 1600 geprüft; Ursache offen |
